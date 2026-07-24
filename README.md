@@ -17,7 +17,6 @@ A SillyTavern extension that adds a **side messenger** to your roleplay — a ma
 - 👥 **Group thread** — the whole party of an open group chat in one conversation, talking to you *and* to each other.
 - 📖 **Its own diary chat** — every conversation gets a separate diary inside **RPG Diary**: entries, memory, summarization, all of it — never mixed with the character's main-story diary.
 - 🧠 **Memory** — the last messages of the main story, the conversation itself (adjustable depth) and, optionally, long-term memory from the Diary.
-- 🔔 **Notifications** — desktop popup and a chime when they text first; clicking it opens the right thread.
 - 🔄 **Reroll & cancel** — regenerate the reply to any of your messages; a hung request can be cancelled from the "typing…" bubble.
 - ✏️ **Editable system prompt** — the whole thing is yours to rewrite, with a reset button.
 - 🎨 **Floating arc of bubbles** — a column beside the chat, wheel-scrolled, older messages fading out; width, fade, offsets and how many are visible are all adjustable.
@@ -39,7 +38,6 @@ Reload SillyTavern and enable it in **Extensions → RPG Phone**.
 2. Pick the **interface language** (English / Русский).
 3. Fill in **API Settings** (URL / key / model) — any OpenAI-compatible text endpoint (default: OpenRouter).
 4. Press the 📱 button at the bottom-right and switch on whoever is allowed to write to you.
-5. Allow browser notifications if you want to be told when they text first.
 
 **If replies come out cut off**, raise *Max reply tokens* — reasoning models spend most of the budget on hidden thinking. The extension also re-asks for the tail once on its own and stitches it back together.
 
