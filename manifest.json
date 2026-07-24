@@ -1,0 +1,12 @@
+{
+    "display_name": "RPG Phone",
+    "loading_order": 118,
+    "requires": [],
+    "optional": [],
+    "js": "index.js",
+    "css": "style.css",
+    "author": "Arkana8",
+    "version": "1.7.1",
+    "homePage": "https://github.com/tavern-rpg-suite/RPG-Phone",
+    "auto_update": false
+}

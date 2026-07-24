@@ -1,0 +1,348 @@
+/* ============================================================
+   RPG PHONE — an arc of messages floating on the right,
+   deliberately away from the chat column and from Living Scene
+   ============================================================ */
+#rph-layer {
+    position: fixed;
+    right: 16px;
+    top: 90px;
+    width: 330px;
+    max-width: 42vw;
+    z-index: 2400;              /* below the suite buttons/modals, above the page */
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    pointer-events: none;       /* only the bubbles and the bar catch clicks */
+}
+
+#rph-stack {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 8px;
+}
+
+.rph-msg {
+    pointer-events: auto;
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 7px 11px;
+    border-radius: 16px 16px 4px 16px;
+    background: linear-gradient(135deg, rgba(120, 190, 255, 0.12), rgba(28, 40, 70, 0.62));
+    border: 1px solid rgba(150, 195, 255, 0.28);
+    backdrop-filter: blur(7px);
+    -webkit-backdrop-filter: blur(7px);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.07);
+    transition: opacity 0.25s ease, transform 0.25s ease;
+    animation: rph-in 0.28s ease-out;
+}
+@keyframes rph-in {
+    from { opacity: 0; transform: translateY(10px) scale(0.96); }
+}
+.rph-msg.mine {
+    border-radius: 16px 16px 16px 4px;
+    background: linear-gradient(135deg, rgba(170, 140, 255, 0.16), rgba(52, 34, 84, 0.62));
+    border-color: rgba(180, 150, 255, 0.32);
+}
+.rph-msg.typing { opacity: 0.7; }
+.rph-msg.typing .rph-text { letter-spacing: 3px; animation: rph-pulse 1.1s ease-in-out infinite; }
+@keyframes rph-pulse { 0%,100% { opacity: 0.35; } 50% { opacity: 1; } }
+
+.rph-ava {
+    width: 28px; height: 28px;
+    border-radius: 50%;
+    object-fit: cover;
+    flex-shrink: 0;
+    border: 1.5px solid rgba(255, 255, 255, 0.35);
+}
+.rph-ava-npc {
+    display: inline-flex; align-items: center; justify-content: center;
+    color: #fff; font-size: 11px; font-weight: 700;
+}
+
+.rph-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.rph-head { display: flex; align-items: baseline; gap: 8px; }
+.rph-name {
+    font-size: 0.72rem; font-weight: 700; letter-spacing: 0.3px;
+    color: #8ec5ff; text-shadow: 0 1px 2px rgba(0,0,0,0.5);
+}
+.rph-msg.mine .rph-name { color: #c5aeff; }
+.rph-time { font-size: 0.62rem; opacity: 0.5; white-space: nowrap; }
+.rph-text {
+    font-size: 0.84rem; line-height: 1.34;
+    color: #eef4ff;
+    text-shadow: 0 1px 2px rgba(0,0,0,0.45);
+    word-break: break-word; white-space: pre-wrap;
+}
+
+/* input bar */
+#rph-bar {
+    pointer-events: auto;
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 10px;
+    border-radius: 18px;
+    background: rgba(22, 26, 44, 0.72);
+    border: 1px solid rgba(150, 195, 255, 0.25);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    align-self: flex-end;
+    width: 100%;
+}
+#rph-input {
+    flex: 1; min-width: 0;
+    background: transparent; border: none; outline: none;
+    color: #eef4ff; font-size: 0.82rem;
+}
+#rph-input::placeholder { color: rgba(238, 244, 255, 0.4); }
+#rph-send { cursor: pointer; color: #8ec5ff; font-size: 0.9rem; }
+#rph-send:hover { color: #7bd88f; transform: scale(1.12); }
+
+/* ============================================================
+   ROSTER
+   ============================================================ */
+#rph-roster {
+    position: fixed;
+    right: 20px; bottom: 84px;
+    width: min(300px, 92vw);
+    max-height: 62vh; overflow-y: auto;
+    z-index: 3002;
+    border-radius: 14px;
+    padding: 14px;
+    background: linear-gradient(150deg, rgba(30, 44, 78, 0.94), rgba(18, 22, 40, 0.95));
+    border: 1px solid rgba(150, 195, 255, 0.3);
+    backdrop-filter: blur(10px);
+    box-shadow: 0 10px 34px rgba(0, 0, 0, 0.5);
+    opacity: 0; pointer-events: none; transform: translateY(8px);
+    transition: opacity 0.18s, transform 0.18s;
+    scrollbar-width: thin;
+}
+#rph-roster.visible { opacity: 1; pointer-events: auto; transform: translateY(0); }
+#rph-roster::-webkit-scrollbar { width: 6px; }
+#rph-roster::-webkit-scrollbar-thumb { background: rgba(150, 195, 255, 0.35); border-radius: 3px; }
+
+.rph-roster-title { font-weight: 700; font-size: 0.95rem; color: #bcd8ff; margin-bottom: 8px; }
+.rph-hint { font-size: 0.75rem; opacity: 0.65; margin-bottom: 8px; }
+.rph-row { display: flex; align-items: center; gap: 8px; padding: 5px 6px; border-radius: 10px; }
+.rph-row:hover { background: rgba(255,255,255,0.05); }
+.rph-row-name { flex: 1; font-size: 0.85rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rph-toggle {
+    width: 36px; height: 20px; border-radius: 10px;
+    background: rgba(255,255,255,0.12); cursor: pointer; position: relative; flex-shrink: 0;
+}
+.rph-toggle .rph-knob {
+    position: absolute; top: 2px; left: 2px; width: 16px; height: 16px;
+    border-radius: 50%; background: #999; transition: left 0.2s, background 0.2s;
+}
+.rph-toggle.on { background: rgba(100, 160, 255, 0.45); }
+.rph-toggle.on .rph-knob { left: 18px; background: #bcd8ff; }
+.rph-roster-actions { margin-top: 10px; display: flex; justify-content: flex-end; }
+
+/* the phone button */
+#rph-btn {
+    width: 50px; height: 50px;
+    background: linear-gradient(135deg, #1f3a6b, #2f6fd1);
+    border: 2px solid #7fb0ff;
+    border-radius: 50%;
+    color: #fff; font-size: 20px;
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer;
+    box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+    transition: transform 0.2s, box-shadow 0.2s;
+}
+#rph-btn:hover { transform: scale(1.1); box-shadow: 0 6px 20px rgba(127, 176, 255, 0.6); }
+
+@media (max-width: 900px) {
+    #rph-layer { width: 250px; }
+}
+
+/* ============================================================
+   MEDIA BUBBLES — photos, voice notes, system events
+   ============================================================ */
+.rph-photo {
+    width: 100%;
+    min-width: 120px;
+    height: 92px;
+    border-radius: 10px;
+    display: flex; align-items: center; justify-content: center;
+    background: linear-gradient(150deg, rgba(255, 214, 150, 0.22), rgba(120, 90, 50, 0.28));
+    border: 1px solid rgba(255, 220, 170, 0.28);
+    color: rgba(255, 226, 180, 0.85);
+    font-size: 26px;
+    margin: 2px 0 4px;
+}
+
+.rph-voice {
+    display: flex; align-items: center; gap: 8px;
+    padding: 5px 8px;
+    margin: 2px 0 4px;
+    border-radius: 20px;
+    background: rgba(255, 255, 255, 0.07);
+    border: 1px solid rgba(150, 195, 255, 0.22);
+    cursor: pointer;
+}
+.rph-play { font-size: 0.8rem; color: #8ec5ff; flex-shrink: 0; }
+.rph-voice.playing .rph-play::before { content: "\f04c"; }   /* pause glyph */
+.rph-wave {
+    flex: 1; display: flex; align-items: center; gap: 2px;
+    height: 20px; min-width: 60px;
+}
+.rph-wave i {
+    display: block; width: 2px; border-radius: 1px;
+    background: rgba(142, 197, 255, 0.55);
+}
+.rph-voice.playing .rph-wave i { background: rgba(142, 197, 255, 0.95); animation: rph-wave 1.1s ease-in-out infinite; }
+@keyframes rph-wave { 0%,100% { transform: scaleY(0.75); } 50% { transform: scaleY(1.15); } }
+.rph-dur { font-size: 0.68rem; opacity: 0.7; flex-shrink: 0; }
+
+.rph-caption {
+    font-size: 0.78rem; font-style: italic; line-height: 1.3;
+    color: #d9c8ff; opacity: 0.92;
+}
+
+.rph-msg.sysmsg {
+    background: rgba(255, 255, 255, 0.06);
+    border-style: dashed;
+    border-color: rgba(255, 255, 255, 0.2);
+    align-self: center;
+    border-radius: 12px;
+}
+.rph-sys { font-size: 0.74rem; font-style: italic; opacity: 0.75; }
+
+/* regenerate on your own message */
+.rph-regen {
+    cursor: pointer; font-size: 0.68rem; opacity: 0.35; margin-left: auto;
+    transition: 0.15s;
+}
+.rph-msg:hover .rph-regen { opacity: 0.9; }
+.rph-regen:hover { color: #f0c24b; transform: rotate(90deg); }
+
+/* ============================================================
+   CONTACT TABS — one conversation per character, plus the group
+   ============================================================ */
+#rph-tabs {
+    /* one row that scrolls sideways — a dozen contacts must not stack into
+       several rows and push the conversation down the screen */
+    display: flex; flex-wrap: nowrap;
+    justify-content: flex-start;
+    gap: 6px; pointer-events: auto; margin-bottom: 2px;
+    overflow-x: auto; overflow-y: hidden;
+    padding: 3px 2px 5px;
+    scrollbar-width: thin;
+    scroll-behavior: smooth;
+    -ms-overflow-style: none;
+    mask-image: linear-gradient(to right, transparent 0, #000 10px, #000 calc(100% - 10px), transparent 100%);
+    -webkit-mask-image: linear-gradient(to right, transparent 0, #000 10px, #000 calc(100% - 10px), transparent 100%);
+}
+#rph-tabs::-webkit-scrollbar { height: 5px; }
+#rph-tabs::-webkit-scrollbar-track { background: transparent; }
+#rph-tabs::-webkit-scrollbar-thumb { background: rgba(150, 195, 255, 0.35); border-radius: 3px; }
+#rph-tabs .rph-tab { flex: 0 0 auto; }
+.rph-tab {
+    position: relative;
+    padding: 2px; border-radius: 50%;
+    border: 2px solid transparent;
+    cursor: pointer; opacity: 0.55;
+    transition: opacity 0.15s, border-color 0.15s, transform 0.15s;
+    background: rgba(20, 26, 46, 0.5);
+    backdrop-filter: blur(6px);
+}
+.rph-tab:hover { opacity: 0.9; transform: translateY(-1px); }
+.rph-tab.on { opacity: 1; border-color: #7fb0ff; box-shadow: 0 0 10px rgba(127, 176, 255, 0.45); }
+.rph-tab .rph-ava { width: 30px; height: 30px; }
+.rph-badge {
+    position: absolute; top: -3px; right: -3px;
+    min-width: 15px; height: 15px; padding: 0 3px;
+    border-radius: 8px; background: #e0555f; color: #fff;
+    font-size: 9px; font-weight: 700; line-height: 15px; text-align: center;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.4);
+}
+
+/* cancel a hung request */
+.rph-msg.typing { position: relative; padding-right: 26px; }
+.rph-cancel {
+    position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
+    cursor: pointer; font-size: 0.78rem; color: #ff8b8b; opacity: 0.75;
+}
+.rph-cancel:hover { opacity: 1; transform: translateY(-50%) scale(1.15); }
+
+/* roster: names are clickable, group row stands out */
+.rph-open { cursor: pointer; }
+.rph-open:hover { color: #bcd8ff; text-decoration: underline; }
+.rph-unread { color: #e0555f; }
+.rph-row.group { border: 1px dashed rgba(150, 195, 255, 0.3); border-radius: 10px; margin-bottom: 4px; }
+
+/* the words actually spoken in a voice note */
+.rph-spoken {
+    font-size: 0.83rem; line-height: 1.32;
+    color: #eef4ff; text-shadow: 0 1px 2px rgba(0,0,0,0.45);
+    word-break: break-word;
+}
+
+/* bubbles animate only on first appearance — a re-render must not replay it */
+.rph-msg.noanim { animation: none; }
+
+/* ============================================================
+   PHONE DIARY
+   ============================================================ */
+#rph-diary-btn {
+    cursor: pointer; color: #cbb6ff; font-size: 0.88rem; flex-shrink: 0;
+    opacity: 0.75; transition: 0.15s;
+}
+#rph-diary-btn:hover { opacity: 1; transform: scale(1.12); color: #e0d0ff; }
+
+#rph-diary-panel {
+    position: fixed;
+    right: 20px; bottom: 84px;
+    width: min(340px, 94vw);
+    max-height: 72vh;
+    display: flex; flex-direction: column;
+    z-index: 3003;
+    border-radius: 14px;
+    padding: 12px;
+    background: linear-gradient(150deg, rgba(42, 34, 66, 0.95), rgba(20, 18, 34, 0.96));
+    border: 1px solid rgba(190, 165, 255, 0.32);
+    backdrop-filter: blur(10px);
+    box-shadow: 0 10px 34px rgba(0, 0, 0, 0.55);
+    opacity: 0; pointer-events: none; transform: translateY(8px);
+    transition: opacity 0.18s, transform 0.18s;
+}
+#rph-diary-panel.visible { opacity: 1; pointer-events: auto; transform: translateY(0); }
+
+.rph-diary-head {
+    display: flex; align-items: center; justify-content: space-between;
+    font-weight: 700; font-size: 0.9rem; color: #d9c8ff; margin-bottom: 8px;
+}
+.rph-diary-close { cursor: pointer; opacity: 0.6; }
+.rph-diary-close:hover { opacity: 1; color: #ff8b8b; }
+
+.rph-diary-list {
+    flex: 1; overflow-y: auto; padding-right: 4px;
+    display: flex; flex-direction: column; gap: 8px;
+    scrollbar-width: thin;
+}
+.rph-diary-list::-webkit-scrollbar { width: 6px; }
+.rph-diary-list::-webkit-scrollbar-thumb { background: rgba(190, 165, 255, 0.35); border-radius: 3px; }
+
+.rph-entry {
+    padding: 8px 10px;
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.05);
+    border-left: 3px solid rgba(190, 165, 255, 0.5);
+}
+.rph-entry.linked { border-left-color: rgba(140, 200, 255, 0.5); background: rgba(120, 190, 255, 0.06); }
+.rph-entry-head {
+    display: flex; align-items: center; justify-content: space-between;
+    font-size: 0.68rem; opacity: 0.6; margin-bottom: 4px;
+}
+.rph-entry-src { font-style: italic; }
+.rph-entry-del { cursor: pointer; }
+.rph-entry-del:hover { color: #ff8b8b; }
+.rph-entry-text {
+    font-size: 0.82rem; line-height: 1.45; white-space: pre-wrap;
+    color: #efeaff; font-style: italic;
+}
+.rph-diary-write { margin-top: 10px; width: 100%; }
+
+/* entries the phone wrote into the real RPG Diary */
+.rph-entry.fromphone { border-left-color: rgba(120, 220, 170, 0.55); background: rgba(120, 220, 170, 0.06); }
