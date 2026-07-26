@@ -96,6 +96,14 @@
 }
 #rph-input::placeholder { color: rgba(238, 244, 255, 0.4); }
 #rph-send { cursor: pointer; color: #8ec5ff; font-size: 0.9rem; }
+#rph-attach { cursor: pointer; color: #8ec5ff; font-size: 0.85rem; opacity: 0.8; }
+#rph-attach:hover { opacity: 1; transform: scale(1.12); color: #7bd88f; }
+.rph-imgwrap { border-radius: 10px; overflow: hidden; line-height: 0; }
+.rph-img { max-width: 100%; max-height: 220px; display: block; border-radius: 10px; }
+.rph-filebox { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-radius: 10px; background: rgba(142, 197, 255, 0.12); border: 1px solid rgba(142, 197, 255, 0.25); }
+.rph-filebox i { font-size: 1.05rem; color: #8ec5ff; }
+.rph-filename { font-size: 0.78rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 170px; }
+.rph-filesize { font-size: 0.68rem; opacity: 0.6; margin-left: auto; }
 #rph-send:hover { color: #7bd88f; transform: scale(1.12); }
 
 /* ============================================================

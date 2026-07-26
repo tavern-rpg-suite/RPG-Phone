@@ -127,6 +127,7 @@ const L = {
         noactive: 'Никто не выбран — открой «Кто на связи» и включи персонажей.',
         err: 'Телефон не отвечает (ошибка ИИ).',
         clear: 'Очистить переписку', cleared: 'Переписка очищена.',
+        attach: 'Прикрепить фото или файлы', attach_limit: 'За раз — не больше 8 вложений; лишние пропущены.',
         just_now: 'только что', min_ago: '{n} мин назад', hr_ago: '{n} ч назад', day_ago: '{n} дн назад'
     },
     en: {
@@ -159,6 +160,7 @@ const L = {
         noactive: 'Nobody selected — open "Who is online" and enable characters.',
         err: 'The phone stays silent (AI error).',
         clear: 'Clear thread', cleared: 'Thread cleared.',
+        attach: 'Attach photos or files', attach_limit: 'Up to 8 attachments at once; the rest were skipped.',
         just_now: 'just now', min_ago: '{n} min ago', hr_ago: '{n} h ago', day_ago: '{n} d ago'
     }
 };
@@ -201,6 +203,7 @@ function stripNamePrefix(text) {
 const RE_PHOTO = /^\[\s*(?:(?:sent|sends|sending)?\s*(?:a\s+)?(?:photo|picture|image|selfie)|отправил[аи]?\s+фото|скинул[аи]?\s+фото|фото|изображени\p{L}*|селфи|картинк\p{L}*)\s*[:\-–—]?\s*([^\]]*?)\s*\]\s*([\s\S]*)$/iu;
 const RE_VOICE = /^\[\s*(?:(?:sent|sends|sending)?\s*(?:a\s+)?(?:voice(?:\s*(?:message|note))?|audio(?:\s*message)?)|голосов\p{L}*(?:\s*сообщени\p{L}*)?|аудио(?:\s*сообщени\p{L}*)?|голос)\s*[:\-–—]?\s*([^\]]*?)\s*\]\s*([\s\S]*)$/iu;
 const RE_SYSTEM = /^\[\s*(?:SYSTEM|СИСТЕМА)\s*[:\-–—]?\s*([^\]]*?)\s*\]\s*([\s\S]*)$/iu;
+const RE_FILE = /^\[\s*(?:(?:sent|sends|sending)?\s*(?:a\s+)?(?:file|document|attachment)|отправил[аи]?\s+файл|скинул[аи]?\s+файл|файл|документ|вложени\p{L}*)\s*[:\-–—]?\s*([^\]]*?)\s*\]\s*([\s\S]*)$/iu;
 
 // classify a line into a bubble kind; media keeps its caption AND any spoken text
 function classify(text) {
@@ -209,6 +212,8 @@ function classify(text) {
     if (m) return { type: 'image', text: (m[2] || '').trim(), caption: (m[1] || '').trim() };
     m = s.match(RE_VOICE);
     if (m) return { type: 'voice', text: (m[2] || '').trim(), caption: (m[1] || '').trim() };
+    m = s.match(RE_FILE);
+    if (m) return { type: 'file', text: (m[2] || '').trim(), caption: (m[1] || '').trim() };
     m = s.match(RE_SYSTEM);
     if (m) {
         const rest = (m[2] || '').trim();
@@ -274,12 +279,15 @@ function threadOf(name) {
     if (!Array.isArray(settings.threads[name])) settings.threads[name] = [];
     return settings.threads[name];
 }
-function pushMsg(name, who, text, from) {
+function pushRaw(id, msg) {
     registerDiarySources();          // a brand-new thread must be known to the diary too
-    const th = threadOf(name);
-    th.push({ who, name: from || name, text, ts: Date.now() });
+    const th = threadOf(id);
+    th.push(msg);
     if (th.length > 200) th.splice(0, th.length - 200);   // keep the store bounded
     saveSettings();
+}
+function pushMsg(name, who, text, from) {
+    pushRaw(name, { who, name: from || name, text, ts: Date.now() });
 }
 function stateOf(name) {
     if (!settings.state[name]) settings.state[name] = { lastInitiative: 0, todayCount: 0, dayStamp: '', ignored: 0 };
@@ -358,7 +366,7 @@ ${threadContext(cur, 30)}`
         const text = cleanLine(String(raw).replace(/^["'«]+|["'»]+$/g, ''), 1800);
         if (text) {
             const api = diaryApi();
-            const wrote = api && api.addEntryTo(diaryKeyOf(cur), {
+            const wrote = api && typeof api.addEntryTo === 'function' && api.addEntryTo(diaryKeyOf(cur), {
                 text, tags: ['📱'], source: 'phone',
                 seed: { author, label: contactLabel(cur) + ' 📱' }
             });
@@ -812,17 +820,114 @@ async function generateReply(names, reasonLine, isInitiative, contactId) {
 }
 
 /* ============================================================
+   ATTACHMENTS
+   The player can send several photos and files at once. Images are
+   stored as SMALL thumbnails (threads live in settings.json — full
+   base64 photos would bloat it); other files keep only name + size.
+   The AI sees them as the same [photo: …] / [file: …] tags it uses
+   itself, so they flow through context, diary and replies naturally.
+   ============================================================ */
+const MAX_ATTACH = 8;
+function fmtSize(n) {
+    if (!Number.isFinite(n)) return '';
+    if (n < 1024) return n + ' B';
+    if (n < 1048576) return (n / 1024).toFixed(0) + ' KB';
+    return (n / 1048576).toFixed(1) + ' MB';
+}
+function thumbOf(file) {
+    return new Promise(resolve => {
+        const fr = new FileReader();
+        fr.onerror = () => resolve(null);
+        fr.onload = () => {
+            const im = new Image();
+            im.onerror = () => resolve(null);
+            im.onload = () => {
+                try {
+                    const MAX = 320;
+                    const k = Math.min(1, MAX / Math.max(im.width, im.height));
+                    const w = Math.max(1, Math.round(im.width * k)), h = Math.max(1, Math.round(im.height * k));
+                    const cv = document.createElement('canvas');
+                    cv.width = w; cv.height = h;
+                    cv.getContext('2d').drawImage(im, 0, 0, w, h);
+                    let out = cv.toDataURL('image/jpeg', 0.72);
+                    if (out.length > 160000) out = cv.toDataURL('image/jpeg', 0.5);
+                    resolve(out.length > 220000 ? null : out);   // pathological case: fall back to a file bubble
+                } catch (e) { resolve(null); }
+            };
+            im.src = fr.result;
+        };
+        fr.readAsDataURL(file);
+    });
+}
+async function sendAttachments(fileList) {
+    const cur = currentContact();
+    if (!cur) { toastr.info(t('noactive')); return; }
+    if (!settings.apiKey) { toastr.warning(t('nokey')); return; }
+    if (busy) return;
+    const all = Array.from(fileList || []);
+    const files = all.slice(0, MAX_ATTACH);
+    if (!files.length) return;
+    if (all.length > MAX_ATTACH) toastr.info(t('attach_limit'));
+
+    const names = contactMembers(cur);
+    if (!names.length) { toastr.info(t('noactive')); return; }
+
+    busy = true; renderBubbles();
+    const you = name1 || 'You';
+    const isRu = settings.language !== 'en';
+    for (const f of files) {
+        try {
+            let img = null;
+            if (/^image\//.test(f.type || '')) img = await thumbOf(f);
+            if (img) {
+                pushRaw(cur, { who: 'user', name: you, text: (isRu ? '[фото: ' : '[photo: ') + f.name + ']', ts: Date.now(), img });
+            } else {
+                const size = fmtSize(f.size);
+                pushRaw(cur, { who: 'user', name: you, text: (isRu ? '[файл: ' : '[file: ') + f.name + (size ? ' (' + size + ')' : '') + ']', ts: Date.now(), file: { name: f.name, size: f.size } });
+            }
+            renderBubbles();
+        } catch (e) { console.error('[Phone] attach error', e); }
+    }
+    // whatever is typed in the input goes along as the caption message
+    const inp = document.getElementById('rph-input');
+    const cap = inp ? String(inp.value).trim().slice(0, 800) : '';
+    if (cap) { inp.value = ''; pushRaw(cur, { who: 'user', name: you, text: cap, ts: Date.now() }); }
+
+    stateOf(cur).ignored = 0;
+    scrollOffset = 0;
+    renderBubbles(true);
+    try {
+        const msgs = await generateReply(names, '', false, cur);
+        if (!msgs.length) toastr.info(t('err'));
+        msgs.forEach(m => pushMsg(cur, 'char', m.text, m.name));
+    } catch (e) {
+        if (e && e.name === 'AbortError') toastr.info(t('cancelled'));
+        else { console.error('[Phone] reply error', e); toastr.warning(t('err')); }
+    }
+    finishRequest();
+    scrollOffset = 0;
+    renderBubbles();
+}
+
+/* ============================================================
    SENDING / RECEIVING
    ============================================================ */
 async function sendUserText(text) {
     const cur = currentContact();
     if (!cur) { toastr.info(t('noactive')); return; }
     if (!settings.apiKey) { toastr.warning(t('nokey')); return; }
-    const clean = cleanLine(text, 800);
+    // User text is taken as-is: cleanLine() is a junk filter for AI lines and used to
+    // swallow perfectly human messages like "нет" or "5".
+    const clean = String(text || '').trim().slice(0, 800);
     if (!clean || busy) return;
 
     const names = contactMembers(cur);
     if (!names.length) { toastr.info(t('noactive')); return; }
+
+    // clear the input only NOW, when the message is truly accepted — clearing it in the
+    // click/keydown handler destroyed the text whenever a check above bailed out
+    const inp = document.getElementById('rph-input');
+    if (inp) inp.value = '';
 
     pushMsg(cur, 'user', clean, name1 || 'You');
     stateOf(cur).ignored = 0;          // answering resets the back-off
@@ -995,6 +1100,8 @@ function ensureLayer() {
             <div id="rph-stack"></div>
             <div id="rph-bar">
                 <i class="fa-solid fa-book" id="rph-diary-btn"></i>
+                <i class="fa-solid fa-paperclip" id="rph-attach"></i>
+                <input type="file" id="rph-file" multiple style="display:none">
                 <input type="text" id="rph-input" placeholder="">
                 <i class="fa-solid fa-paper-plane" id="rph-send"></i>
             </div>`;
@@ -1012,18 +1119,23 @@ function ensureLayer() {
         }, { passive: false });
 
         $('#rph-diary-btn').on('click', () => openRealDiary());
-        $('#rph-send').on('click', () => {
-            const v = $('#rph-input').val();
-            $('#rph-input').val('');
-            sendUserText(v);
+        $('#rph-attach').on('click', () => { const f = document.getElementById('rph-file'); if (f && !busy) f.click(); });
+        $('#rph-file').on('change', function () {
+            const files = this.files;
+            if (files && files.length) sendAttachments(files);
+            this.value = '';   // the same files can be picked again next time
         });
+        // the input is cleared by sendUserText itself, only after every check has passed —
+        // clearing it here used to silently destroy the text when sending was not possible
+        $('#rph-send').on('click', () => sendUserText($('#rph-input').val()));
         $('#rph-input').on('keydown', (e) => {
             e.stopPropagation();
-            if (e.key === 'Enter') { const v = $(e.target).val(); $(e.target).val(''); sendUserText(v); }
+            if (e.key === 'Enter') sendUserText($(e.target).val());
         });
     }
     $('#rph-input').attr('placeholder', t('ph'));
     $('#rph-diary-btn').attr('title', t('diary_btn'));
+    $('#rph-attach').attr('title', t('attach'));
 }
 
 function currentThread() {
@@ -1104,7 +1216,16 @@ function renderBubbles(force) {
         const kind = classify(m.text);
 
         let inner;
-        if (kind.type === 'image') {
+        if (m.img) {
+            // a real photo the player attached — the thumbnail itself is the bubble
+            inner = `<div class="rph-imgwrap"><img class="rph-img" src="${m.img}" draggable="false"></div>` +
+                (kind.caption ? `<div class="rph-caption">${escapeHtml(kind.caption)}</div>` : '');
+        } else if (m.file || kind.type === 'file') {
+            const label = m.file ? m.file.name : (kind.caption || 'file');
+            const size = m.file ? fmtSize(m.file.size) : '';
+            inner = `<div class="rph-filebox"><i class="fa-solid fa-file-lines"></i><span class="rph-filename">${escapeHtml(label)}</span>${size ? `<span class="rph-filesize">${escapeHtml(size)}</span>` : ''}</div>` +
+                (!m.file && kind.text ? `<div class="rph-text">${escapeHtml(stripNamePrefix(kind.text))}</div>` : '');
+        } else if (kind.type === 'image') {
             inner = `<div class="rph-photo"><i class="fa-regular fa-image"></i></div>` +
                 (kind.caption ? `<div class="rph-caption">${escapeHtml(kind.caption)}</div>` : '') +
                 (kind.text ? `<div class="rph-text">${escapeHtml(stripNamePrefix(kind.text))}</div>` : '');
@@ -1354,7 +1475,7 @@ function setupUI() {
     num('#rph-width', 'bubbleWidth', 150, 480, 260);
     num('#rph-vis', 'visibleCount', 2, 20, 7);
     num('#rph-fade', 'fade', 0, 90, 35);
-    num('#rph-right', 'offsetRight', 0, 600, 16);
+    num('#rph-right', 'offsetRight', 0, 600, 70);
     num('#rph-top', 'offsetTop', 0, 600, 90);
     $('#rph-prompt').val(settings.prompt).on('change', function () { settings.prompt = $(this).val(); saveSettings(); });
     $('#rph-prompt-reset').on('click', () => { settings.prompt = DEFAULT_PROMPT; $('#rph-prompt').val(DEFAULT_PROMPT); saveSettings(); });

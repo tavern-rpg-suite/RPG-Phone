@@ -6,7 +6,7 @@
     "js": "index.js",
     "css": "style.css",
     "author": "Arkana8",
-    "version": "1.7.1",
+    "version": "1.8.0",
     "homePage": "https://github.com/tavern-rpg-suite/RPG-Phone",
     "auto_update": false
 }
