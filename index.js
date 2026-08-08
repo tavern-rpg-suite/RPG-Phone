@@ -347,7 +347,7 @@ function phoneDiaryState(contactId) {
 async function writeDiaryEntry() {
     const cur = currentContact();
     if (!cur || busy) return;
-    if (!settings.apiKey) { toastr.warning(t('nokey')); return; }
+    if (!apiKey()) { toastr.warning(t('nokey')); return; }
     const names = contactMembers(cur);
     const author = names[0];
     if (!author) return;
@@ -710,10 +710,70 @@ function cancelRequest() {
     renderBubbles();
 }
 
+/* ------------------------------------------------------------
+   ENDPOINT HANDLING — reaching the server only. Nothing about messages,
+   contacts, initiative or any prompt changes here.
+   1. An empty key falls back to Tavern RPG Engine's. An address YOU typed always
+      wins: borrowing takes only what is missing, never the URL. A local backend
+      needs no key, so a placeholder is used rather than a borrowed one.
+   2. OpenAI-style backends live under /v1; without it LM Studio and KoboldCpp
+      reject the path outright.
+   There is no response_format anywhere in this module, so nothing needs gating
+   for local backends — that is why the usual third helper is absent.
+   ------------------------------------------------------------ */
+const KEY_SOURCES = ['tavern_rpg_engine'];
+function normalizeBase(url) {
+    let u = String(url || '').trim().replace(/\s+/g, '');
+    if (!u) return u;
+    u = u.replace(/\/+$/, '');
+    u = u.replace(/\/(chat\/completions|completions|images|images\/generations|embeddings)$/i, '');
+    if (!/\/v\d+($|\/)/i.test(u)) u += '/v1';
+    return u;
+}
+function isLocalEndpoint(url) {
+    const u = String(url || '').toLowerCase();
+    if (!u) return false;
+    return /(^|\/\/)(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\]|host\.docker\.internal)([:/]|$)/.test(u)
+        || /:(5001|5000|8080|8000|1234|11434|5002)(\/|$)/.test(u)
+        || /192\.168\.|10\.\d+\.|172\.(1[6-9]|2\d|3[01])\./.test(u);
+}
+function borrowedRaw() {
+    for (const src of KEY_SOURCES) {
+        if (src === MODULE_NAME) continue;
+        try {
+            const x = extension_settings[src];
+            if (x && x.apiKey && x.model) return { url: x.baseUrl, key: x.apiKey, model: x.model, from: src };
+        } catch (e) { /* a neighbour with broken settings must not break us */ }
+    }
+    return { url: '', key: '', model: '', from: null };
+}
+function apiConf() {
+    const own = String(settings.baseUrl || '').trim();
+    const ownKey = String(settings.apiKey || '').trim();
+    const ownModel = String(settings.model || '').trim();
+    if (own) {
+        const local = isLocalEndpoint(own);
+        const b = (ownKey && ownModel) ? { key: '', model: '', from: null } : borrowedRaw();
+        return {
+            url: own,
+            key: ownKey || (local ? 'local' : b.key),
+            model: ownModel || (local ? '' : b.model),
+            from: ownKey ? null : (local ? null : b.from)
+        };
+    }
+    if (ownKey && ownModel) return { url: '', key: ownKey, model: ownModel, from: null };
+    const b = borrowedRaw();
+    return b.key ? b : { url: '', key: ownKey, model: ownModel, from: null };
+}
+function apiKey() { return apiConf().key || ''; }
+function apiUrl() { return normalizeBase(apiConf().url) || 'https://openrouter.ai/api/v1'; }
+function apiModel() { return apiConf().model || ''; }
+function borrowedFrom() { return apiConf().from; }
+
 let lastFinish = '';
 async function callAI(system, user) {
-    if (!settings.apiKey) throw new Error('no api key');
-    const url = (settings.baseUrl || 'https://openrouter.ai/api/v1').replace(/\/$/, '') + '/chat/completions';
+    if (!apiKey()) throw new Error('no api key');
+    const url = apiUrl() + '/chat/completions';
     const ctrl = new AbortController();
     currentAbort = ctrl;
     if (watchdog) clearTimeout(watchdog);
@@ -723,9 +783,9 @@ async function callAI(system, user) {
         res = await fetch(url, {
             method: 'POST',
             signal: ctrl.signal,
-            headers: { 'Authorization': `Bearer ${settings.apiKey.trim()}`, 'Content-Type': 'application/json' },
+            headers: { 'Authorization': `Bearer ${apiKey().trim()}`, 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                model: settings.model,
+                model: apiModel(),
                 messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
                 temperature: settings.temperature,
                 // some providers ignore max_tokens and honour max_completion_tokens instead;
@@ -862,7 +922,7 @@ function thumbOf(file) {
 async function sendAttachments(fileList) {
     const cur = currentContact();
     if (!cur) { toastr.info(t('noactive')); return; }
-    if (!settings.apiKey) { toastr.warning(t('nokey')); return; }
+    if (!apiKey()) { toastr.warning(t('nokey')); return; }
     if (busy) return;
     const all = Array.from(fileList || []);
     const files = all.slice(0, MAX_ATTACH);
@@ -915,7 +975,7 @@ async function sendAttachments(fileList) {
 async function sendUserText(text) {
     const cur = currentContact();
     if (!cur) { toastr.info(t('noactive')); return; }
-    if (!settings.apiKey) { toastr.warning(t('nokey')); return; }
+    if (!apiKey()) { toastr.warning(t('nokey')); return; }
     // User text is taken as-is: cleanLine() is a junk filter for AI lines and used to
     // swallow perfectly human messages like "нет" or "5".
     const clean = String(text || '').trim().slice(0, 800);
@@ -953,7 +1013,7 @@ async function sendUserText(text) {
 async function regenerateAfter(index) {
     const cur = currentContact();
     if (!cur || busy) return;
-    if (!settings.apiKey) { toastr.warning(t('nokey')); return; }
+    if (!apiKey()) { toastr.warning(t('nokey')); return; }
     const names = contactMembers(cur);
     const th = threadOf(cur);
     const anchor = th[index];
@@ -1006,7 +1066,7 @@ let lastUserActivity = Date.now();
 function markActivity() { lastUserActivity = Date.now(); }
 
 function initiativeTick() {
-    if (!settings.enabled || !settings.initiative || !settings.apiKey || busy) return;
+    if (!settings.enabled || !settings.initiative || !apiKey() || busy) return;
     const names = contactList();
     if (!names.length) return;
 
