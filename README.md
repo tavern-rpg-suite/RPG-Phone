@@ -1,7 +1,7 @@
 # RPG Phone
 
 <p>
-<img width="1672" height="941" alt="f1c8bf6d-dd7b-47d5-9579-c8536c12d806" src="https://github.com/user-attachments/assets/440515b9-12fe-4714-8781-21429a7d4b57" />
+<img width="1672" height="941" alt="f1c8bf6d-dd7b-47d5-9579-c8536c12d8068" src="https://github.com/user-attachments/assets/c532a5ca-a759-4379-90ca-209c358d36ed" />
 </p>
 
 A SillyTavern extension that adds a **side messenger** to your roleplay — a magical phone that links your world to theirs. It lives apart from the main chat: characters text you about what's happening, and, most of the time, they **start the conversation themselves**.
