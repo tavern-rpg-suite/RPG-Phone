@@ -1,7 +1,7 @@
 # RPG Phone
 
 <p>
-<img width="1440" height="720" alt="l633rl633rl633rl" src="https://github.com/user-attachments/assets/fe9b20cd-7280-47a5-8bd8-19133513ec79" />
+<img width="1672" height="941" alt="f1c8bf6d-dd7b-47d5-9579-c8536c12d806" src="https://github.com/user-attachments/assets/440515b9-12fe-4714-8781-21429a7d4b57" />
 </p>
 
 A SillyTavern extension that adds a **side messenger** to your roleplay — a magical phone that links your world to theirs. It lives apart from the main chat: characters text you about what's happening, and, most of the time, they **start the conversation themselves**.
@@ -11,6 +11,8 @@ A SillyTavern extension that adds a **side messenger** to your roleplay — a ma
 ---
 
 ## ✨ Features
+
+<img width="374" height="584" alt="Screenshot_33" src="https://github.com/user-attachments/assets/3240a1b1-1b49-47fc-bd20-8bdbd95e4927" />
 
 - 📱 **A separate thread per character** — own history, own initiative, own diary. Chatting with one never leaks into another.
 - ⏰ **Real initiative** — no coin flips and no "message every N turns". Pressure builds from silence in the thread, the main story stalling, an unanswered line, time of day and how many days have passed. When it tips over, the model is handed **a concrete reason** and writes from it.
