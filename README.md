@@ -6,13 +6,14 @@
 
 A SillyTavern extension that adds a **side messenger** to your roleplay — a magical phone that links your world to theirs. It lives apart from the main chat: characters text you about what's happening, and, most of the time, they **start the conversation themselves**.
 
-**Version 1.8.1**
+**Version 2.0.0**
 
 ---
 
 ## ✨ Features
 
-<img width="374" height="584" alt="Screenshot_33" src="https://github.com/user-attachments/assets/3240a1b1-1b49-47fc-bd20-8bdbd95e4927" />
+<img width="1700" height="702" alt="Skins" src="https://github.com/user-attachments/assets/4feee2d8-f172-4884-82a9-d862960ad925" />
+
 
 - 📱 **A separate thread per character** — own history, own initiative, own diary. Chatting with one never leaks into another.
 - ⏰ **Real initiative** — no coin flips and no "message every N turns". Pressure builds from silence in the thread, the main story stalling, an unanswered line, time of day and how many days have passed. When it tips over, the model is handed **a concrete reason** and writes from it.
@@ -20,12 +21,15 @@ A SillyTavern extension that adds a **side messenger** to your roleplay — a ma
 - 🌙 **Quiet hours & daily cap** — no texts at 4 a.m. unless you want them.
 - 🕰️ **They know the clock** — real date, weekday, time of day and how long it's been since the last message.
 - 🎧 **Voice notes and photos** — sent as text tags, drawn as a real player with a waveform, or a photo card with a caption.
+- 📷 **Real photos** — tap a photo they described and it gets drawn: cloud image APIs or your own ComfyUI, the same engine as RPG Dungeons. Or let every photo develop on its own. Not happy with one? ↻ redraws it, and the old photo stays until the new one arrives.
+- 🔊 **Voices** — ▶ on a voice note speaks it with SillyTavern's own TTS, in the voice you gave that character.
+- 🎭 **One card, many people** — an RP card with a whole cast: list who lives in it (👥 next to the card in *Who is online*) and each of them texts under their own name and avatar. People RPG Diary has filed as NPCs for that character are recognised on their own.
 - 👥 **Group thread** — the whole party of an open group chat in one conversation, talking to you *and* to each other.
 - 📖 **Its own diary chat** — every conversation gets a separate diary inside **RPG Diary**: entries, memory, summarization, all of it — never mixed with the character's main-story diary.
-- 🧠 **Memory** — the last messages of the main story, the conversation itself (adjustable depth) and, optionally, long-term memory from the Diary.
+- 🧠 **Memory** — the last messages of the main story (only for characters who are actually in the open chat — someone from another story never sees it), the conversation itself (adjustable depth) and, optionally, long-term memory from the Diary. A context ceiling trims the oldest lines first if a request would not fit.
 - 🔄 **Reroll & cancel** — regenerate the reply to any of your messages; a hung request can be cancelled from the "typing…" bubble.
-- ✏️ **Editable system prompt** — the whole thing is yours to rewrite, with a reset button.
-- 🎨 **Floating arc of bubbles** — a column beside the chat, wheel-scrolled, older messages fading out; width, fade, offsets and how many are visible are all adjustable.
+- ✏️ **Editable system prompt** — *Main* (slow-burn, for mature roleplay), *Short replies* (the same, texting in one to three short messages) or your own text; yours is kept aside while you look at the others, and a reset button brings *Main* back.
+- 🎨 **Five skins** — the original floating arc of bubbles, or a real phone: **Cute**, **Gothic**, **Lace** or **Classic**. See below.
 - 🌍 **Bilingual UI (RU / EN)**.
 
 ## 📦 Install
