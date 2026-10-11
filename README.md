@@ -21,7 +21,7 @@ A SillyTavern extension that adds a **side messenger** to your roleplay — a ma
 - 🌙 **Quiet hours & daily cap** — no texts at 4 a.m. unless you want them.
 - 🕰️ **They know the clock** — real date, weekday, time of day and how long it's been since the last message.
 - 🎧 **Voice notes and photos** — sent as text tags, drawn as a real player with a waveform, or a photo card with a caption.
-- 📷 **Real photos** — tap a photo they described and it gets drawn: cloud image APIs or your own ComfyUI, the same engine as RPG Dungeons. Or let every photo develop on its own. Not happy with one? ↻ redraws it, and the old photo stays until the new one arrives.
+- 📷 **Real photos** — tap a photo they described and it gets drawn: cloud image APIs or your own ComfyUI. Or let every photo develop on its own. Not happy with one? ↻ redraws it, and the old photo stays until the new one arrives.
 - 🔊 **Voices** — ▶ on a voice note speaks it with SillyTavern's own TTS, in the voice you gave that character.
 - 🎭 **One card, many people** — an RP card with a whole cast: list who lives in it (👥 next to the card in *Who is online*) and each of them texts under their own name and avatar. People RPG Diary has filed as NPCs for that character are recognised on their own.
 - 👥 **Group thread** — the whole party of an open group chat in one conversation, talking to you *and* to each other.
