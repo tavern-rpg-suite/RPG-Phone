@@ -25,11 +25,11 @@ A SillyTavern extension that adds a **side messenger** to your roleplay — a ma
 - 🔊 **Voices** — ▶ on a voice note speaks it with SillyTavern's own TTS, in the voice you gave that character.
 - 🎭 **One card, many people** — an RP card with a whole cast: list who lives in it (👥 next to the card in *Who is online*) and each of them texts under their own name and avatar. People RPG Diary has filed as NPCs for that character are recognised on their own.
 - 👥 **Group thread** — the whole party of an open group chat in one conversation, talking to you *and* to each other.
-- 📖 **Its own diary chat** — every conversation gets a separate diary inside **RPG Diary**: entries, memory, summarization, all of it — never mixed with the character's main-story diary.
+- 📖 **Its own diary chat** — every conversation gets a separate diary inside [**RPG Diary**](https://github.com/tavern-rpg-suite/RPG-Diary): entries, memory, summarization, all of it — never mixed with the character's main-story diary.
 - 🧠 **Memory** — the last messages of the main story (only for characters who are actually in the open chat — someone from another story never sees it), the conversation itself (adjustable depth) and, optionally, long-term memory from the Diary. A context ceiling trims the oldest lines first if a request would not fit.
 - 🔄 **Reroll & cancel** — regenerate the reply to any of your messages; a hung request can be cancelled from the "typing…" bubble.
 - ✏️ **Editable system prompt** — *Main* (slow-burn, for mature roleplay), *Short replies* (the same, texting in one to three short messages) or your own text; yours is kept aside while you look at the others, and a reset button brings *Main* back.
-- 🎨 **Five skins** — the original floating arc of bubbles, or a real phone: **Cute**, **Gothic**, **Lace** or **Classic**. See below.
+- 🎨 **Five skins** — the original floating arc of bubbles, or a real phone: **Cute**, **Gothic**, **Lace** or **Classic**.
 - 🌍 **Bilingual UI (RU / EN)**.
 
 ## 📦 Install
