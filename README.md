@@ -6,7 +6,7 @@
 
 A SillyTavern extension that adds a **side messenger** to your roleplay — a magical phone that links your world to theirs. It lives apart from the main chat: characters text you about what's happening, and, most of the time, they **start the conversation themselves**.
 
-**Version 2.0.0**
+**Version 2.0.3**
 
 ---
 
