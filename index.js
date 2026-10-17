@@ -154,6 +154,7 @@ const defaults = {
     unread: {},             // contactId -> unread counter
     diaries: {},            // contactId -> [{ts, date, mood, text}] — the PHONE's own diary
     cast: {},               // card name -> "Kai Lis, Rufus, Мэй": people who live inside one RP card
+    aliases: {},            // card name -> "Уильям, Уилл": other ways the model writes that name (2.0.1)
     looks: {},              // person -> { useAvatar, refKey, desc }: who they look like on photos
     current: ''             // the conversation currently open
 };
@@ -181,7 +182,7 @@ let msgNodes = new Map();    // bubble key -> its element, reused across renders
 function loadSettings() {
     if (!extension_settings[MODULE_NAME]) extension_settings[MODULE_NAME] = {};
     settings = Object.assign({}, defaults, extension_settings[MODULE_NAME]);
-    for (const k of ['threads', 'active', 'state', 'unread', 'diaries', 'cast', 'looks']) if (!settings[k] || typeof settings[k] !== 'object') settings[k] = {};
+    for (const k of ['threads', 'active', 'state', 'unread', 'diaries', 'cast', 'looks', 'aliases']) if (!settings[k] || typeof settings[k] !== 'object') settings[k] = {};
     for (const k of ['temperature', 'contextTokens', 'mainChatMessages', 'minGapMinutes', 'maxPerDay', 'quietFrom', 'quietTo', 'arcDepth', 'bubbleWidth', 'visibleCount', 'offsetRight', 'offsetTop', 'fade', 'diaryEntries', 'threadMemory', 'maxTokens', 'phoneSize', 'wallDim']) {
         if (!Number.isFinite(settings[k])) settings[k] = defaults[k];
     }
@@ -194,6 +195,15 @@ function loadSettings() {
     }
     if (typeof settings.prompt !== 'string' || !settings.prompt.trim()) { settings.prompt = DEFAULT_PROMPT; if (settings.promptPreset === 'custom') settings.promptPreset = 'main'; }
     if (!SKINS.includes(settings.skin)) settings.skin = 'arc';
+    // (2.0.2) a hand-edited or damaged settings file: a thread that is not a list, an empty slot
+    // or a message whose text is not text no longer stops the whole phone from drawing
+    for (const id of Object.keys(settings.threads)) {
+        const th = settings.threads[id];
+        if (!Array.isArray(th)) { settings.threads[id] = []; continue; }
+        settings.threads[id] = th.filter(m => m && typeof m === 'object' && (m.text !== undefined && m.text !== null))
+            .map(m => { if (typeof m.text !== 'string') m.text = String(m.text); if (typeof m.name !== 'string') m.name = m.who === 'user' ? (name1 || 'You') : String(m.name ?? id); return m; });
+    }
+    for (const k of ['cast', 'aliases']) for (const id of Object.keys(settings[k])) if (typeof settings[k][id] !== 'string') delete settings[k][id];
     settings.phoneSize = Math.max(80, Math.min(130, settings.phoneSize));
     settings.wallDim = Math.max(0, Math.min(80, settings.wallDim));
     // photo generation: same shape as the Rabbit Hole's, merged so new fields get defaults
@@ -242,7 +252,8 @@ const L = {
         look_ph: 'Внешность: глаза, волосы — длина и цвет, телосложение, одежда…', look_scan: '👁 Распознать по картинке', look_scanning: 'Смотрю…',
         look_noref: 'Нет картинки — загрузи свою или включи аватарку.', look_err: 'Не вышло распознать: {m}. Нужна модель, которая видит картинки (например Gemini).',
         look_src_own: 'своя картинка', look_src_lens: 'из Линзы', look_src_ava: 'аватарка', look_src_none: 'без картинки — только описание',
-        cast_title: 'Персонажи внутри этой карточки', cast_ph: 'Имена персонажей карточки, через запятую', set_preset: 'Шаблон', pr_main: 'Основной', pr_short: 'Короткие ответы', pr_custom: 'Свой',
+        cast_title: 'Персонажи внутри этой карточки', cast_ph: 'Имена персонажей карточки, через запятую', alias_ph: 'Ещё зовут: Уильям, Уилл, Руфус = Rufus',
+        msg_edit: 'Изменить', msg_del: 'Удалить', msg_del_sure: 'Нажмите ещё раз, чтобы удалить', msg_save: 'Сохранить (Enter)', msg_cancel: 'Отмена (Esc)', set_preset: 'Шаблон', pr_main: 'Основной', pr_short: 'Короткие ответы', pr_custom: 'Свой',
         set_quiet_to: 'до', set_memory: 'Память', set_test: 'Проверить связь', api_hint: 'Пусто — возьмётся ключ Tavern RPG Engine.',
         api_borrowed: 'Ключ взят из {src}', api_nokey: 'Ключа нет — впиши свой или включи Tavern RPG Engine.',
         api_wait: 'проверяю…', api_badkey: 'Ключ не подошёл.', api_http: 'Провайдер ответил {n}.', api_ok: '✓ на связи',
@@ -309,7 +320,8 @@ const L = {
         look_ph: 'Looks: eyes, hair length and colour, build, outfit…', look_scan: '👁 Read from the picture', look_scanning: 'Looking…',
         look_noref: 'No picture — upload one or enable the avatar.', look_err: 'Could not read it: {m}. This needs a model that can see images (e.g. Gemini).',
         look_src_own: 'own picture', look_src_lens: 'from Lens', look_src_ava: 'avatar', look_src_none: 'no picture — description only',
-        cast_title: 'Characters inside this card', cast_ph: 'Names of the characters in this card, comma-separated', set_preset: 'Template', pr_main: 'Main', pr_short: 'Short replies', pr_custom: 'My own',
+        cast_title: 'Characters inside this card', cast_ph: 'Names of the characters in this card, comma-separated', alias_ph: 'Also called: Will, Уильям, Руфус = Rufus',
+        msg_edit: 'Edit', msg_del: 'Delete', msg_del_sure: 'Click again to delete', msg_save: 'Save (Enter)', msg_cancel: 'Cancel (Esc)', set_preset: 'Template', pr_main: 'Main', pr_short: 'Short replies', pr_custom: 'My own',
         set_quiet_to: 'to', set_memory: 'Memory', set_test: 'Test connection', api_hint: 'Empty — the Tavern RPG Engine key is used.',
         api_borrowed: 'Key borrowed from {src}', api_nokey: 'No key — enter one or enable Tavern RPG Engine.',
         api_wait: 'checking…', api_badkey: 'The key was rejected.', api_http: 'The provider answered {n}.', api_ok: '✓ connected',
@@ -378,13 +390,24 @@ function cleanLine(x, max = 400) {
    inside the text is noise. It also sends media as bracket tags,
    which deserve to LOOK like media instead of raw brackets.
    ============================================================ */
-function stripNamePrefix(text) {
-    // one leading "Word:" / "Мин-джун:" token — never a whole sentence
-    // BUG FIX (2.0.0): "[фото: закат]", "[голосовое: …]", "[photo: …]", "[SYSTEM: …]" —
-    // "[фото" looked like a name too, so the tag lost its head and arrived as "закат]":
-    // plain text instead of a photo or a voice note. A bracket never starts a name.
-    return String(text || '').replace(/^\s*([^\s:]{2,24})\s*:\s+(?=\S)/u, (m, p) => (/\d/.test(p) || p.startsWith('[') ? m : ''));
+function stripNamePrefix(text, names) {
+    // BUG FIX (2.0.1): any leading "Word:" was cut off — "Note: buy milk" came out as
+    // "buy milk", "Слушай: я тут подумала" as "я тут подумала", the player's own texts
+    // included. Only a NAME is taken off now: the sender's own (passed in), written
+    // "Name:", "**Name:**" or "[Name]:" — anything else is part of the message.
+    // (2.0.0: a bracket never starts a name, so "[фото: закат]" keeps its head.)
+    const s = String(text || '');
+    const list = (Array.isArray(names) ? names : [names]).map(n => String(n || '').trim().toLowerCase()).filter(Boolean);
+    if (!list.length) return s;
+    if (/^\s*\[/.test(s) && !/^\s*\[[^\]]*\]\s*[:：]/.test(s)) return s;   // "[William: печатает…]" is a remark
+    const m = RE_NAME_HEAD.exec(s);
+    return m && list.includes(m[1].trim().toLowerCase()) ? s.slice(m[0].length) : s;
 }
+// "Name:", "**Name:**", "**Name**:", "*Name:*", "__Name__:", "[Name]:", "Name：" — a name of
+// up to 40 characters at the very start of a line, its colon, and whatever wraps them
+// (2.0.2) the name starts and ends on a character, so the spaces around it can be read
+// only one way — "   William   :" with thousands of spaces used to take seconds
+const RE_NAME_HEAD = /^\s*(?:(?:\*\*|__|\*|_)\s*)?\[?([^:：\[\]*_\s](?:[^:：\[\]*_\n]{0,38}[^:：\[\]*_\s])?)\]?\s*(?:(?:\*\*|__|\*|_)\s*)?[:：](?:\s*(?:\*\*|__|\*|_)(?=\s))?\s*(?=\S)/u;
 
 // NOTE on \p{L}: JavaScript's \w is ASCII-only, so "голосов\w*" matched just "голосов"
 // and the leftover "ое сообщение:" ended up inside the caption ("ое сообщение: холодный
@@ -392,19 +415,58 @@ function stripNamePrefix(text) {
 // The tag may also be a PREFIX with real text after it —
 // "[voice message: soft tone] Don't try to catch up all at once" — so each pattern
 // captures the caption AND whatever follows the closing bracket.
-const RE_PHOTO = /^\[\s*(?:(?:sent|sends|sending)?\s*(?:a\s+)?(?:photo|picture|image|selfie)|отправил[аи]?\s+фото|скинул[аи]?\s+фото|фото|изображени\p{L}*|селфи|картинк\p{L}*)\s*[:\-–—]?\s*([^\]]*?)\s*\]\s*([\s\S]*)$/iu;
-const RE_VOICE = /^\[\s*(?:(?:sent|sends|sending)?\s*(?:a\s+)?(?:voice(?:\s*(?:message|note))?|audio(?:\s*message)?)|голосов\p{L}*(?:\s*сообщени\p{L}*)?|аудио(?:\s*сообщени\p{L}*)?|голос)\s*[:\-–—]?\s*([^\]]*?)\s*\]\s*([\s\S]*)$/iu;
-const RE_SYSTEM = /^\[\s*(?:SYSTEM|СИСТЕМА)\s*[:\-–—]?\s*([^\]]*?)\s*\]\s*([\s\S]*)$/iu;
-const RE_FILE = /^\[\s*(?:(?:sent|sends|sending)?\s*(?:a\s+)?(?:file|document|attachment)|отправил[аи]?\s+файл|скинул[аи]?\s+файл|файл|документ|вложени\p{L}*)\s*[:\-–—]?\s*([^\]]*?)\s*\]\s*([\s\S]*)$/iu;
+// BUG FIX (2.0.1): the keyword had no end — "[фотография: закат]" became a photo of
+// "графия: закат", "[фотограф пришёл]" a photo of "граф пришёл", "[голоса за дверью]" a
+// voice note "а за дверью", "[voicemail: …]" one of "mail: …". Every keyword now ends on
+// a word boundary and lists its own forms (фотка, фотографию, голосовуха…). Also taken:
+// a verb in front ("[скинула фотку: …]", "[отправил голосовое: …]"), an emoji in or
+// before the tag ("📷 [фото: …]", "[🎤 голосовое: …]"), round brackets "(фото: …)".
+function mediaRe(words) {
+    const EMO = '(?:[\\p{Extended_Pictographic}\\u{FE0F}\\u{200D}]\\s*)*';
+    const VERB = '(?:(?:sent|sends|sending|shares?|sharing|attach(?:es|ed)?|отправил[аи]?|отправляю|скинул[аи]?|скидываю|прислал[аи]?|присылаю|записал[аи]?)\\s+)?(?:a\\s+|an\\s+)?';
+    const KW = `${VERB}(?:${words})(?![\\p{L}\\p{N}])(?:\\s+of(?![\\p{L}]))?`;
+    // [ … ] with anything but "]" inside; ( … ) only with a colon or a dash, or bare —
+    // "(картинка висит на стене)" is a stage direction, "(фото: закат)" is a photo.
+    // OPTIMIZATION (2.0.2): the caption used to be "\s*(.*?)\s*" — three ways to read every
+    // run of spaces, so "[фото:" and two thousand spaces with no "]" froze the page for
+    // seconds (in 2.0.0 too). A caption now starts and ends on a character and takes each
+    // run of spaces whole: one way to read it, linear time.
+    const cap = close => `((?:[^\\${close}\\s](?:[^\\${close}\\s]|\\s+(?=[^\\${close}\\s]))*)?)`;
+    return new RegExp(`^${EMO}(?:\\[\\s*${EMO}${KW}\\s*(?:[:\\-–—]\\s*)?${cap(']')}\\s*\\]|\\(\\s*${EMO}${KW}(?:\\s*[:\\-–—]\\s*${cap(')')})?\\s*\\))\\s*([\\s\\S]*)$`, 'iu');
+}
+const RE_PHOTO = mediaRe('photo(?:graph)?s?|pics?|picture|image|selfie|snapshot|фото(?:графи\\p{L}*|чк\\p{L}*)?|фотк\\p{L}*|изображени\\p{L}*|селфи|картинк\\p{L}*|снимок|снимк\\p{L}*');
+const RE_VOICE = mediaRe('voice(?:\\s*(?:message|note|memo))?|voicemail|audio(?:\\s*(?:message|note))?|голосов\\p{L}*(?:\\s*сообщени\\p{L}*)?|голос|аудио(?:\\s*сообщени\\p{L}*)?|аудиосообщени\\p{L}*');
+const RE_SYSTEM = mediaRe('SYSTEM(?:\\s+message)?|СИСТЕМА|системное(?:\\s+сообщение)?');
+const RE_FILE = mediaRe('file|document|attachment|файл|документ|вложени\\p{L}*');
+// a whole tag in emphasis — "*[фото: закат]*", "_(photo: tea)_" — is still the tag
+function unwrapEmphasis(s) {
+    const m = /^(\*\*|__|\*|_)\s*([\[(][\s\S]*)$/u.exec(s);
+    if (!m) return s;
+    const inner = m[2].trimEnd();
+    return inner.endsWith(m[1]) ? inner.slice(0, -m[1].length).trimEnd() : s;
+}
+function mediaMatch(re, s) {
+    // a tag is short: no closing bracket in the first 1200 characters — not a tag (and no
+    // regex ever walks a huge unclosed line)
+    const close = s.search(/[\])]/);
+    if (close < 0 || close > 1200) return null;
+    const m = re.exec(s);
+    return m ? { caption: (m[1] ?? m[2] ?? '').trim(), rest: (m[3] || '').trim() } : null;
+}
 
 // "Kai Lis: [voice message: …]" — a sender name of one to three capitalised words
 // (spaces allowed) in front of the line. Used to recognise a speaker the card does not
 // name (an NPC of a world card) and to see the media tag behind such a prefix.
-const RE_SENDER = /^\[?(\p{Lu}[\p{L}\p{M}'’.\-]*(?:\s\p{Lu}[\p{L}\p{M}'’.\-]*){0,2})\]?\s*:\s*(.+)$/u;
+// BUG FIX (2.0.1): "[Фото: закат]" on a line of its own was read as a sender called
+// "Фото" saying "закат]" — a bracket in front of a name now needs its pair ("[Kai]:").
+// A full-width colon "Kai：" counts as a colon.
+const RE_SENDER_NAME = "\\p{Lu}[\\p{L}\\p{M}'’.\\-]*(?:\\s\\p{Lu}[\\p{L}\\p{M}'’.\\-]*){0,2}";
+const RE_SENDER = new RegExp(`^(?:\\[(${RE_SENDER_NAME})\\]|(${RE_SENDER_NAME}))\\s*[:：]\\s*(.+)$`, 'u');
 function splitSender(line) {
     const m = RE_SENDER.exec(String(line || '').trim());
-    if (!m || m[1].length > 32 || /^(?:system|система)$/i.test(m[1])) return null;
-    return { name: m[1], rest: m[2].trim() };
+    const name = m && (m[1] || m[2]);
+    if (!name || name.length > 32 || /^(?:system|система)$/i.test(name)) return null;
+    return { name, rest: m[3].trim() };
 }
 
 // A world card writes "Академия…: Kai Lis: text" — a second name behind the card's.
@@ -435,6 +497,31 @@ function castList(name) {
     }
     return out.slice(0, 30);
 }
+/* (2.0.2) Other ways the model writes a name, kept per card in «Ещё зовут»:
+   "Уильям, Уилл" are the card itself; "Руфус = Rufus" is someone living inside it. */
+function aliasPairs(card) {
+    return String(settings.aliases?.[card] || '').split(/[,;\n]/).map(x => x.trim()).filter(Boolean).map(x => {
+        const i = x.indexOf('=');
+        if (i < 0) return { alias: x, to: card };
+        const a = x.slice(0, i).trim(), b = x.slice(i + 1).trim();
+        return a && b ? { alias: a, to: b } : null;
+    }).filter(Boolean);
+}
+// every other name of one person, whichever card's field it was written in
+function aliasesOf(name) {
+    const k = String(name || '').trim().toLowerCase();
+    const out = [];
+    if (!k) return out;
+    for (const card of Object.keys(settings.aliases || {})) for (const p of aliasPairs(card)) if (p.to.toLowerCase() === k) out.push(p.alias);
+    return out;
+}
+// the person an alias stands for, looked up in the fields of these cards
+function byAlias(cand, cards) {
+    const k = String(cand || '').trim().toLowerCase();
+    if (!k) return null;
+    for (const card of cards || []) for (const p of aliasPairs(card)) if (p.alias.toLowerCase() === k) return p.to;
+    return null;
+}
 function castOfContact(id) {
     const out = [];
     for (const n of contactMembers(id)) for (const c of castList(n)) if (!out.includes(c)) out.push(c);
@@ -446,18 +533,20 @@ function classify(text) {
     let s = String(text || '').trim();
     // BUG FIX (2.0.0): a media tag behind a sender name ("Kai Lis: [sent a photo: …]")
     // was shown as plain text — the tag must start the line to be recognised
-    if (s && s[0] !== '[') { const sp = splitSender(s); if (sp && sp.rest[0] === '[') s = sp.rest; }
-    let m = s.match(RE_PHOTO);
-    if (m) return { type: 'image', text: (m[2] || '').trim(), caption: (m[1] || '').trim() };
-    m = s.match(RE_VOICE);
-    if (m) return { type: 'voice', text: (m[2] || '').trim(), caption: (m[1] || '').trim() };
-    m = s.match(RE_FILE);
-    if (m) return { type: 'file', text: (m[2] || '').trim(), caption: (m[1] || '').trim() };
-    m = s.match(RE_SYSTEM);
-    if (m) {
-        const rest = (m[2] || '').trim();
-        return { type: 'system', text: [(m[1] || '').trim(), rest].filter(Boolean).join(' '), caption: '' };
-    }
+    if (s && s[0] !== '[') { const sp = splitSender(s); if (sp && /^[\[(*_]/.test(sp.rest)) s = sp.rest; }
+    const t = unwrapEmphasis(s);
+    let m = mediaMatch(RE_PHOTO, t);
+    if (m) return { type: 'image', text: m.rest, caption: m.caption };
+    m = mediaMatch(RE_VOICE, t);
+    if (m) return { type: 'voice', text: m.rest, caption: m.caption };
+    m = mediaMatch(RE_FILE, t);
+    if (m) return { type: 'file', text: m.rest, caption: m.caption };
+    m = mediaMatch(RE_SYSTEM, t);
+    if (m) return { type: 'system', text: [m.caption, m.rest].filter(Boolean).join(' '), caption: '' };
+    // (2.0.1) "[William печатает… с мягкой, глубокой нежностью]" — a remark, not words:
+    // on its own it is a status line, in front of words it heads the bubble in italics
+    const n = t[0] === '[' ? /^\[([^\]]*)\]([\s\S]*)$/.exec(t) : null;
+    if (n && /\p{L}/u.test(n[1])) return { type: 'note', text: n[2].trim(), caption: n[1].trim() };
     return { type: 'text', text: s, caption: '' };
 }
 
@@ -531,7 +620,7 @@ function pushRaw(id, msg) {
     if (msg.who === 'char') {
         const kind = classify(msg.text);
         if (kind.type === 'image' && imgCfg().enabled && imgCfg().auto) setTimeout(() => queuePhoto(id, msg, false), 0);
-        if (kind.type === 'voice' && settings.tts && settings.ttsAuto && kind.text) setTimeout(() => speakVoice(msg.name, stripNamePrefix(kind.text), id), 0);
+        if (kind.type === 'voice' && settings.tts && settings.ttsAuto && kind.text) setTimeout(() => speakVoice(msg.name, stripNamePrefix(kind.text, msg.name), id), 0);
     }
 }
 function pushMsg(name, who, text, from) {
@@ -612,7 +701,8 @@ ${threadContext(cur, 30)}`
         ].filter(Boolean).join('\n\n');
         const raw = await callAIComplete(sys, usr);
         if (!isCurrent(rq)) return;    // cancelled while writing
-        const text = cleanLine(String(raw).replace(/^["'«]+|["'»]+$/g, ''), 1800);
+        // (2.0.1) a leaked <think> block went into the diary along with the entry
+        const text = cleanLine(cleanReplyText(raw).trim().replace(/^["'«]+|["'»]+$/g, ''), 1800);
         if (text) {
             const api = diaryApi();
             const wrote = api && typeof api.addEntryTo === 'function' && api.addEntryTo(diaryKeyOf(cur), {
@@ -1724,7 +1814,8 @@ async function recognizeLook(dataUrl) {
     const data = await resp.json();
     const c = data?.choices?.[0]?.message?.content;
     const text = typeof c === 'string' ? c : (Array.isArray(c) ? c.map(x => x?.text ?? '').join(' ') : '');
-    const tags = cleanTags(String(text || '').replace(/```/g, '').replace(/^\s*tags\s*:/i, ''));
+    // (2.0.1) a reasoning model's leaked <think> block is not the tags
+    const tags = cleanTags(cleanReplyText(text).replace(/```/g, '').replace(/^\s*tags\s*:/i, ''));
     if (!tags) throw new Error(t('e_empty'));
     return tags;
 }
@@ -1734,7 +1825,7 @@ function photoPrompt(m) {
     const kind = classify(m.text);
     const look = descFor(m.name);
     const map = {
-        CAPTION: kind.caption || stripNamePrefix(kind.text) || 'a photo',
+        CAPTION: kind.caption || stripNamePrefix(kind.text, m.name) || 'a photo',
         NAME: m.name || '',
         LOOK: look ? `If ${m.name} is in the picture, they look like this: ${look}.` : '',
         STYLE: cfg.style ? `Style: ${String(cfg.style).trim()}.` : ''
@@ -1943,29 +2034,71 @@ async function callAIComplete(system, user) {
     return out;
 }
 
+/* BUG FIX (2.0.1) — what models really wrap their lines in:
+   • reasoning that leaked into the answer: <think>…</think> (also <thinking>, <reasoning>),
+     a closing tag whose opening the provider ate, or one that never closed — each of its
+     lines used to arrive as a text from the character;
+   • code fences ``` / ```text around the whole reply;
+   • "- Name: …", "> Name: …", "1. Name: …" — a list or quote marker before the name. */
+function cleanReplyText(raw) {
+    let s = String(raw ?? '').replace(/\r/g, '');
+    if (/<\/(?:think|thinking|reasoning|reflection)\s*>/i.test(s)) s = s.replace(/<(think|thinking|reasoning|reflection)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, '');
+    const close = s.search(/<\/(?:think|thinking|reasoning|reflection)\s*>/i);
+    if (close >= 0) s = s.slice(s.indexOf('>', close) + 1);
+    const open = s.search(/<(?:think|thinking|reasoning|reflection)\b[^>]*>/i);
+    if (open >= 0) s = s.slice(0, open);
+    return s.replace(/^[ \t]*```[\w-]*[ \t]*$/gm, '');
+}
+const LIST_MARK = /^(?:[-•–—>]|\*(?=\s)|\d{1,2}[.)])\s+/;
+// a whole message in quotes — "…" «…» “…” — is just the message
+function unquote(x) {
+    const m = /^(["“„«])([^"“”„«»]+)(["”“»])$/.exec(x);
+    return m ? m[2].trim() : x;
+}
+
 // the model answers in "Name: line" form — split it into separate bubbles
 function parseReply(raw, allowed, extra = []) {
     const out = [];
-    for (const line of String(raw).split('\n')) {
-        const s = line.trim();
+    const you = String(name1 || '').trim().toLowerCase();
+    const known = n => { const k = String(n || '').trim().toLowerCase(); return !!k && (k === you || /^(?:system|система)$/.test(k) || allowed.some(x => x.toLowerCase() === k) || extra.some(x => x.toLowerCase() === k) || !!byAlias(k, allowed)); };
+    let last = null;        // who spoke the line before: a line without a name goes on in their voice
+    for (const line of cleanReplyText(raw).split('\n')) {
+        let s = line.trim();
         if (!s) continue;
-        const m = s.match(/^\[?([^:\[\]]{1,40}?)\]?\s*:\s*(.+)$/);
+        // "- Rufus: …", "> Rufus: …" — the marker goes, the line is Rufus's
+        if (LIST_MARK.test(s)) {
+            const bare = s.replace(LIST_MARK, '');
+            const h = RE_NAME_HEAD.exec(bare), sp = splitSender(bare);
+            if ((h && known(h[1])) || (sp && /\s/.test(sp.name))) s = bare;
+        }
+        // (2.0.1) "[William: печатает…]" is a remark in brackets, not William saying "печатает…]" —
+        // a name in front of a bracket needs its pair ("[William]: …"); "[SYSTEM: …]" stays an event
+        const m = s[0] === '[' && !/^\[[^\]]*\]\s*[:：]/.test(s) && !/^\[\s*(?:system|система)(?!\p{L})/iu.test(s) ? null : RE_NAME_HEAD.exec(s);
         let who = null, text = s;
         if (m) {
             const cand = m[1].trim();
-            const hit = allowed.find(n => n.toLowerCase() === cand.toLowerCase());
+            const rest = s.slice(m[0].length).replace(/^(?:\*\*|__|\*|_)\s*(?=\S)/, '').trim();
+            const via = byAlias(cand, allowed);      // «Ещё зовут»: the card, or someone inside it
+            const same = x => n => n.toLowerCase() === String(x || '').toLowerCase();
+            const hit = allowed.find(same(cand)) || (via && allowed.find(same(via)));
             // BUG FIX (2.0.0): "[SYSTEM: Kai went offline]" lost its opening bracket here and
             // showed up as an ordinary bubble ending in a stray "]" — the event is kept whole
-            if (/^system$/i.test(cand)) { who = 'SYSTEM'; text = s.startsWith('[') ? s : `[SYSTEM: ${m[2].trim()}]`; }
+            // (2.0.1: "СИСТЕМА:" too)
+            if (/^(?:system|система)$/i.test(cand)) { who = 'SYSTEM'; text = s.startsWith('[') ? s : `[SYSTEM: ${rest}]`; }
+            // BUG FIX (2.0.1): the model sometimes writes a line FOR the player ("Ari: hey!") —
+            // it came out as a text from someone called Ari. It is not theirs to send.
+            // A line after it with no name is not dropped — there is no telling whose it is,
+            // and losing a real line of theirs would be worse; it goes to the card as before.
+            else if (you && cand.toLowerCase() === you) { last = null; continue; }
             else if (hit) {
-                who = hit; text = m[2].trim();
+                who = hit; text = rest;
                 // BUG FIX (2.0.0): "Академия…: Kai Lis: …" — the speaker's name stayed in the text
                 const ns = nestedSender(text, extra);
                 if (ns) { who = ns.name; text = ns.rest; }
             } else {
                 // someone who lives inside the card ("Rufus: …")
-                const inCast = extra.find(n => n.toLowerCase() === cand.toLowerCase());
-                if (inCast) { who = inCast; text = m[2].trim(); }
+                const inCast = extra.find(same(cand)) || (via && (extra.find(same(via)) || via));
+                if (inCast) { who = inCast; text = rest; }
             }
         }
         // BUG FIX (2.0.0): a world/group card speaks as people the card itself does not
@@ -1973,10 +2106,16 @@ function parseReply(raw, allowed, extra = []) {
         // line showed "Kai Lis: [voice message …]" raw. A capitalised name of up to three
         // words is now taken as the sender.
         if (!who) { const sp = splitSender(s); if (sp) { who = sp.name; text = sp.rest; } }
-        if (!who) who = allowed[0];
+        if (!who) {
+            // BUG FIX (2.0.1): a second line of Rufus's went to the card's owner — a line with
+            // no name now goes on in the voice of whoever spoke just before it
+            who = last || allowed[0];
+        }
+        if (who !== 'SYSTEM') last = who;
         // BUG FIX (2.0.0): a bubble was silently cut at 400 characters and everything after
         // the 6th line was dropped — long replies and group threads lost their ending
-        const clean = cleanLine(stripNamePrefix(text), 1500);
+        // (2.0.1: only the sender's own name repeated inside is taken off — "Note: …" stays)
+        const clean = cleanLine(who === 'SYSTEM' ? text : unquote(stripNamePrefix(text, [who].concat(aliasesOf(who)))), 1500);
         if (clean) out.push({ name: who, text: clean });
         if (out.length >= 12) break;
     }
@@ -2624,7 +2763,7 @@ function renderBubbles(force) {
     const lastTs = th.length ? th[th.length - 1].ts : 0;
     const sig = [cur, th.length, lastTs, busy, scrollOffset, settings.bubbleWidth, settings.arcDepth,
         settings.visibleCount, settings.fade, settings.offsetRight, settings.offsetTop, settings.language,
-        settings.skin, settings.phoneSize, phoneWindow, genRev, !!imgCfg().enabled, busyFor].join('|');
+        settings.skin, settings.phoneSize, phoneWindow, genRev, !!imgCfg().enabled, busyFor, editRev].join('|');
     if (sig === lastSig) {
         // same content: only the "5 min ago" labels age — update them in place
         const labels = stack.querySelectorAll('.rph-time');
@@ -2676,10 +2815,10 @@ function renderBubbles(force) {
             const label = m.file ? m.file.name : (kind.caption || 'file');
             const size = m.file ? fmtSize(m.file.size) : '';
             inner = `<div class="rph-filebox"><i class="fa-solid fa-file-lines"></i><span class="rph-filename">${escapeHtml(label)}</span>${size ? `<span class="rph-filesize">${escapeHtml(size)}</span>` : ''}</div>` +
-                (!m.file && kind.text ? `<div class="rph-text">${escapeHtml(stripNamePrefix(kind.text))}</div>` : '');
+                (!m.file && kind.text ? `<div class="rph-text">${escapeHtml(stripNamePrefix(kind.text, mine ? null : shownName))}</div>` : '');
         } else if (kind.type === 'image') {
             const words = (kind.caption ? `<div class="rph-caption">${escapeHtml(kind.caption)}</div>` : '') +
-                (kind.text ? `<div class="rph-text">${escapeHtml(stripNamePrefix(kind.text))}</div>` : '');
+                (kind.text ? `<div class="rph-text">${escapeHtml(stripNamePrefix(kind.text, mine ? null : shownName))}</div>` : '');
             if (m.gen) {
                 // a drawn photo can be drawn again; while it redraws, the old one stays under a veil
                 const st = !mine && imgOn ? genState.get(photoId(cur, m)) : null;
@@ -2696,23 +2835,36 @@ function renderBubbles(force) {
                 `<span class="rph-wave">${vm.bars.map(b => `<i style="height:${b}%"></i>`).join('')}</span>` +
                 `<span class="rph-dur">${vm.dur}</span></div>` +
                 // the spoken words go in quotes under the player; the tag itself is the tone
-                (kind.text ? `<div class="rph-spoken">«${escapeHtml(stripNamePrefix(kind.text))}»</div>` : '') +
+                (kind.text ? `<div class="rph-spoken">«${escapeHtml(stripNamePrefix(kind.text, mine ? null : shownName))}»</div>` : '') +
                 (kind.caption ? `<div class="rph-caption">${escapeHtml(kind.caption)}</div>` : '');
         } else if (kind.type === 'system') {
             inner = `<div class="rph-sys">${escapeHtml(kind.text)}</div>`;
+        } else if (kind.type === 'note') {
+            // a remark on its own is a status line; with words after it, it heads the bubble
+            const said = String(kind.caption).toLowerCase();
+            // the arc already shows the name above the line; a phone hides it, so it goes in front
+            const named = mine || !phone || [shownName].concat(aliasesOf(shownName)).some(n => n && said.includes(String(n).toLowerCase()));
+            inner = kind.text
+                ? `<div class="rph-note-in">${escapeHtml(kind.caption)}</div><div class="rph-text">${escapeHtml(stripNamePrefix(kind.text, mine ? null : shownName))}</div>`
+                : `<div class="rph-sys rph-note">${named ? '' : `<b>${escapeHtml(shownName)}</b> · `}${escapeHtml(kind.caption)}</div>`;
         } else {
-            inner = `<div class="rph-text">${escapeHtml(stripNamePrefix(kind.text))}</div>`;
+            inner = `<div class="rph-text">${escapeHtml(stripNamePrefix(kind.text, mine ? null : shownName))}</div>`;
         }
 
+        // a status line: a system event, or a remark in brackets with nothing after it
+        const status = kind.type === 'system' || (kind.type === 'note' && !kind.text);
+        // (2.0.1) every message can be edited or deleted — the same small icons as ↻
+        const acts = `<span class="rph-acts"><i class="fa-solid fa-pen rph-edit-btn" data-ts="${m.ts}" title="${escapeHtml(t('msg_edit'))}"></i><i class="fa-solid fa-trash-can rph-del-btn" data-ts="${m.ts}" title="${escapeHtml(t('msg_del'))}"></i></span>`;
         const body = `
-            ${mine || kind.type === 'system' ? '' : avatarHtml(shownName)}
+            ${mine || status ? '' : avatarHtml(shownName)}
             <div class="rph-body">
                 <div class="rph-head">
                     <span class="rph-name">${escapeHtml(mine ? (name1 || 'You') : shownName)}</span>
                     <span class="rph-time"></span>
                     ${mine ? `<i class="fa-solid fa-rotate rph-regen" data-ts="${m.ts}" title="${escapeHtml(t('regen_title'))}"></i>` : ''}
+                    ${status ? '' : acts}
                 </div>
-                ${inner}
+                ${inner}${status ? acts : ''}
             </div>
         `;
         const key = msgKey(cur, m);
@@ -2729,7 +2881,7 @@ function renderBubbles(force) {
             el.innerHTML = body;
             el.__body = body;
         }
-        el.className = `rph-msg ${mine ? 'mine' : ''} ${kind.type === 'system' ? 'sysmsg' : ''} ${grp ? 'grp' : ''} ${fresh ? '' : 'noanim'}`;
+        el.className = `rph-msg ${mine ? 'mine' : ''} ${status ? 'sysmsg' : ''} ${kind.type === 'note' ? 'notemsg' : ''} ${grp ? 'grp' : ''} ${fresh ? '' : 'noanim'}${el.querySelector(':scope > .rph-body > .rph-edit') ? ' editing' : ''}`;
         // the arc's bulge, fade and bubble width belong to the arc; a phone lays out by itself
         if (phone) el.removeAttribute('style');
         else el.setAttribute('style', `opacity:${opacity}; transform:translateX(${-bulge.toFixed(1)}px); max-width:${settings.bubbleWidth}px;`);
@@ -2830,6 +2982,69 @@ function onStackScroll() {
     });
 }
 
+/* ============================================================
+   EDIT / DELETE A MESSAGE (2.0.1)
+   ✎ opens the message's own text (tags included: "[фото: …]") right in the bubble —
+   Enter saves, Shift+Enter is a new line, Esc cancels. 🗑 asks once more, then removes the
+   message and the pictures that belong to it. The model, the diary and the story see the
+   thread as it now is.
+   ============================================================ */
+let editRev = 0;
+function msgAt(cur, ts) { const th = threadOf(cur); const i = th.findIndex(x => x.ts === ts); return i < 0 ? null : { th, i, m: th[i] }; }
+function startEdit(cur, el, ts) {
+    const f = msgAt(cur, ts);
+    if (!f || !el) return;
+    const body = el.querySelector(':scope > .rph-body');
+    if (!body || body.querySelector('.rph-edit')) return;
+    const box = document.createElement('div');
+    box.className = 'rph-edit';
+    box.innerHTML = `<textarea class="rph-edit-in" rows="1" maxlength="${f.m.who === 'user' ? 800 : 1500}"></textarea>
+        <span class="rph-edit-bar"><i class="fa-solid fa-xmark rph-edit-no" title="${escapeHtml(t('msg_cancel'))}"></i><i class="fa-solid fa-check rph-edit-ok" title="${escapeHtml(t('msg_save'))}"></i></span>`;
+    body.appendChild(box);
+    el.classList.add('editing');
+    const ta = box.querySelector('textarea');
+    ta.value = f.m.text;
+    const fit = () => { ta.style.height = 'auto'; ta.style.height = Math.min(220, ta.scrollHeight + 2) + 'px'; };
+    const close = () => { box.remove(); el.classList.remove('editing'); };
+    const save = () => {
+        const g = msgAt(cur, ts);
+        const v = ta.value.replace(/\r/g, '').trim().slice(0, g && g.m.who === 'user' ? 800 : 1500);
+        if (!g || !v || v === g.m.text) { close(); return; }
+        g.m.text = v;
+        saveSettings();
+        editRev++;
+        close();
+        renderBubbles();
+    };
+    ta.addEventListener('input', fit);
+    ta.addEventListener('keydown', ev => {
+        ev.stopPropagation();                   // Tavern's own hotkeys stay out of it
+        if (ev.key === 'Escape') { ev.preventDefault(); close(); }
+        else if (ev.key === 'Enter' && !ev.shiftKey && !ev.isComposing) { ev.preventDefault(); save(); }
+    });
+    box.querySelector('.rph-edit-ok').addEventListener('click', ev => { ev.stopPropagation(); save(); });
+    box.querySelector('.rph-edit-no').addEventListener('click', ev => { ev.stopPropagation(); close(); });
+    fit();
+    ta.focus();
+    ta.setSelectionRange(ta.value.length, ta.value.length);
+}
+function askDelete(cur, btn, ts) {
+    if (!btn.classList.contains('sure')) {
+        btn.classList.add('sure');
+        btn.title = t('msg_del_sure');
+        clearTimeout(btn._sure);
+        btn._sure = setTimeout(() => { btn.classList.remove('sure'); btn.title = t('msg_del'); }, 3000);
+        return;
+    }
+    clearTimeout(btn._sure);
+    const f = msgAt(cur, ts);
+    if (!f) return;
+    forgetMessages(f.th.splice(f.i, 1));        // a photo goes with its message
+    saveSettings();
+    editRev++;
+    renderBubbles();
+}
+
 // one click handler for the whole column — bubbles are reused, so no per-render binding
 function onStackClick(e) {
     const tgt = e.target;
@@ -2839,6 +3054,11 @@ function onStackClick(e) {
     if (cx) { e.stopPropagation(); cancelRequest(); return; }
     const rg = tgt.closest('.rph-regen');
     if (rg) { e.stopPropagation(); regenerateAfter(Number(rg.dataset.ts)); return; }
+    const ed = tgt.closest('.rph-edit-btn');
+    if (ed && cur) { e.stopPropagation(); startEdit(cur, ed.closest('.rph-msg'), Number(ed.dataset.ts)); return; }
+    const dl = tgt.closest('.rph-del-btn');
+    if (dl && cur) { e.stopPropagation(); askDelete(cur, dl, Number(dl.dataset.ts)); return; }
+    if (tgt.closest('.rph-edit')) return;      // typing in the editor is not a click on the bubble
     const stop = tgt.closest('.rph-photo-stop');
     if (stop) { e.stopPropagation(); cancelPhotos(); return; }
     const redo = tgt.closest('.rph-photo-redo');
@@ -2864,7 +3084,7 @@ function onStackClick(e) {
         if (!vo.classList.contains('playing') || !settings.tts || !cur) return;
         const m = msgByTs(cur, Number(vo.dataset.ts), 'voice');
         const ns = m ? nestedSender(m.text, castOfContact(cur)) : null;   // the same speaker the bubble shows
-        const words = m ? stripNamePrefix(classify(m.text).text) : '';
+        const words = m ? stripNamePrefix(classify(m.text).text, ns ? ns.name : m.name) : '';
         if (!words) return;
         speakVoice(ns ? ns.name : m.name, words, cur).then(ok => {
             // the wave plays about as long as the words take to say; nothing said → it stops at once
@@ -2999,6 +3219,7 @@ function renderRoster() {
         ${settings.active[n] ? `<div class="rph-lookrow" data-name="${escapeHtml(n)}" style="display:none"></div>` : ''}
         ${settings.active[n] ? `<div class="rph-castrow" data-name="${escapeHtml(n)}" style="display:none">
             <input type="text" class="text_pole rph-cast-in" maxlength="400" placeholder="${escapeHtml(t('cast_ph'))}" value="${escapeHtml(castTxt)}">
+            <input type="text" class="text_pole rph-cast-in rph-alias-in" maxlength="600" placeholder="${escapeHtml(t('alias_ph'))}" value="${escapeHtml(String(settings.aliases[n] || ''))}">
         </div>` : ''}`;
     }).join('');
     html += `<div class="rph-roster-actions"><button class="menu_button" id="rph-clear">${t('clear')}</button></div>`;
@@ -3027,7 +3248,22 @@ function renderRoster() {
         if (row.is(':visible')) row.find('input').trigger('focus');
     });
     body.on('keydown.rph', '.rph-cast-in', e => e.stopPropagation());
-    body.on('change.rph', '.rph-cast-in', function () {
+    body.on('change.rph', '.rph-alias-in', function (e) {
+        e.stopImmediatePropagation();           // not the cast list
+        const n = String($(this).closest('.rph-castrow').data('name'));
+        // "Уильям, Уилл, Руфус = Rufus" — tidied; the card's own name is not an alias of itself
+        const v = String($(this).val()).split(/[,;\n]/).map(x => {
+            const i = x.indexOf('=');
+            if (i < 0) return x.trim().slice(0, 32);
+            const a = x.slice(0, i).trim().slice(0, 32), b = x.slice(i + 1).trim().slice(0, 32);
+            return a && b ? `${a} = ${b}` : '';
+        }).filter(x => x && x.split(' = ')[0].toLowerCase() !== n.toLowerCase()).slice(0, 20).join(', ');
+        if (v) settings.aliases[n] = v; else delete settings.aliases[n];
+        $(this).val(v);
+        saveSettings();
+        lastSig = ''; renderBubbles();
+    });
+    body.on('change.rph', '.rph-cast-in:not(.rph-alias-in)', function () {
         const n = String($(this).closest('.rph-castrow').data('name'));
         const v = String($(this).val()).split(/[,;\n]/).map(x => x.trim().slice(0, 32)).filter(Boolean).slice(0, 20).join(', ');
         if (v) settings.cast[n] = v; else delete settings.cast[n];
