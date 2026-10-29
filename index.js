@@ -787,7 +787,7 @@ function renderDiaryPanel() {
                         <span>${escapeHtml(e.date || dateLabel(e.ts))}${e.mood ? ' · ' + escapeHtml(e.mood) : ''}</span>
                         ${e.src === 'phone' ? `<span class="rph-entry-src">📱</span>`
                             : e.src === 'chat' ? `<span class="rph-entry-src">${escapeHtml(t('diary_from_chat'))}</span>`
-                            : `<i class="fa-solid fa-trash rph-entry-del" data-ts="${e.ts}" title="${escapeHtml(t('diary_del'))}"></i>`}
+                            : `<i class="fa-solid fa-trash rph-entry-del" data-ts="${escapeHtml(e.ts)}" title="${escapeHtml(t('diary_del'))}"></i>`}
                     </div>
                     <div class="rph-entry-text">${escapeHtml(e.text)}</div>
                 </div>`).join('')
@@ -2823,7 +2823,7 @@ function renderBubbles(force) {
                 // a drawn photo can be drawn again; while it redraws, the old one stays under a veil
                 const st = !mine && imgOn ? genState.get(photoId(cur, m)) : null;
                 const redoing = st === 'queued' || st === 'busy';
-                inner = `<div class="rph-imgwrap gen${redoing ? ' redoing' : ''}" data-ts="${m.ts}">${imgTag(m.gen, true)}` +
+                inner = `<div class="rph-imgwrap gen${redoing ? ' redoing' : ''}" data-ts="${escapeHtml(m.ts)}">${imgTag(m.gen, true)}` +
                     (redoing ? `<span class="rph-redo-veil"><i class="fa-solid fa-spinner fa-spin"></i><i class="fa-solid fa-xmark rph-photo-stop" title="${escapeHtml(t('img_cancel'))}"></i></span>`
                         : (imgOn && !mine ? `<i class="fa-solid fa-rotate rph-photo-redo" title="${escapeHtml(t('img_redo'))}"></i>` : '')) +
                     `</div>` + words;
@@ -2831,7 +2831,7 @@ function renderBubbles(force) {
             else inner = photoPlaceholder(cur, m, mine, imgOn) + words;
         } else if (kind.type === 'voice') {
             const vm = voiceMeta(kind.caption + kind.text);
-            inner = `<div class="rph-voice" data-ts="${m.ts}"><i class="fa-solid fa-play rph-play"></i>` +
+            inner = `<div class="rph-voice" data-ts="${escapeHtml(m.ts)}"><i class="fa-solid fa-play rph-play"></i>` +
                 `<span class="rph-wave">${vm.bars.map(b => `<i style="height:${b}%"></i>`).join('')}</span>` +
                 `<span class="rph-dur">${vm.dur}</span></div>` +
                 // the spoken words go in quotes under the player; the tag itself is the tone
@@ -2854,14 +2854,14 @@ function renderBubbles(force) {
         // a status line: a system event, or a remark in brackets with nothing after it
         const status = kind.type === 'system' || (kind.type === 'note' && !kind.text);
         // (2.0.1) every message can be edited or deleted — the same small icons as ↻
-        const acts = `<span class="rph-acts"><i class="fa-solid fa-pen rph-edit-btn" data-ts="${m.ts}" title="${escapeHtml(t('msg_edit'))}"></i><i class="fa-solid fa-trash-can rph-del-btn" data-ts="${m.ts}" title="${escapeHtml(t('msg_del'))}"></i></span>`;
+        const acts = `<span class="rph-acts"><i class="fa-solid fa-pen rph-edit-btn" data-ts="${escapeHtml(m.ts)}" title="${escapeHtml(t('msg_edit'))}"></i><i class="fa-solid fa-trash-can rph-del-btn" data-ts="${escapeHtml(m.ts)}" title="${escapeHtml(t('msg_del'))}"></i></span>`;
         const body = `
             ${mine || status ? '' : avatarHtml(shownName)}
             <div class="rph-body">
                 <div class="rph-head">
                     <span class="rph-name">${escapeHtml(mine ? (name1 || 'You') : shownName)}</span>
                     <span class="rph-time"></span>
-                    ${mine ? `<i class="fa-solid fa-rotate rph-regen" data-ts="${m.ts}" title="${escapeHtml(t('regen_title'))}"></i>` : ''}
+                    ${mine ? `<i class="fa-solid fa-rotate rph-regen" data-ts="${escapeHtml(m.ts)}" title="${escapeHtml(t('regen_title'))}"></i>` : ''}
                     ${status ? '' : acts}
                 </div>
                 ${inner}${status ? acts : ''}
@@ -2946,13 +2946,13 @@ function photoPlaceholder(cur, m, mine, imgOn) {
     if (!imgOn || mine) return `<div class="rph-photo"><i class="fa-regular fa-image"></i></div>`;
     const st = genState.get(photoId(cur, m));
     if (st === 'queued' || st === 'busy') {
-        return `<div class="rph-photo busy" data-ts="${m.ts}"><i class="fa-solid fa-spinner fa-spin"></i><span class="rph-develop">${escapeHtml(t('img_drawing'))}</span>` +
+        return `<div class="rph-photo busy" data-ts="${escapeHtml(m.ts)}"><i class="fa-solid fa-spinner fa-spin"></i><span class="rph-develop">${escapeHtml(t('img_drawing'))}</span>` +
             `<i class="fa-solid fa-xmark rph-photo-stop" title="${escapeHtml(t('img_cancel'))}"></i></div>`;
     }
     if (st && st.err) {
-        return `<div class="rph-photo err" data-ts="${m.ts}" title="${escapeHtml(st.err)}"><i class="fa-solid fa-rotate-right"></i><span class="rph-develop">${escapeHtml(t('img_retry'))}</span></div>`;
+        return `<div class="rph-photo err" data-ts="${escapeHtml(m.ts)}" title="${escapeHtml(st.err)}"><i class="fa-solid fa-rotate-right"></i><span class="rph-develop">${escapeHtml(t('img_retry'))}</span></div>`;
     }
-    return `<div class="rph-photo can-gen" data-ts="${m.ts}"><i class="fa-regular fa-image"></i><span class="rph-develop"><i class="fa-solid fa-camera"></i> ${escapeHtml(t('img_develop'))}</span></div>`;
+    return `<div class="rph-photo can-gen" data-ts="${escapeHtml(m.ts)}"><i class="fa-regular fa-image"></i><span class="rph-develop"><i class="fa-solid fa-camera"></i> ${escapeHtml(t('img_develop'))}</span></div>`;
 }
 function msgKey(cur, m) { return cur + '\u0001' + m.ts + '\u0001' + m.who + '\u0001' + m.text + '\u0001' + (m.imgKey || '') + (m.gen ? '\u0001g' : ''); }
 function msgByTs(cur, ts, type) {
