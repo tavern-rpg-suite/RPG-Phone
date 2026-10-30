@@ -98,6 +98,24 @@
 #rph-send { cursor: pointer; color: #8ec5ff; font-size: 0.9rem; }
 #rph-attach { cursor: pointer; color: #8ec5ff; font-size: 0.85rem; opacity: 0.8; }
 #rph-attach:hover { opacity: 1; transform: scale(1.12); color: #7bd88f; }
+/* photos and files waiting for their caption: a row of small previews above the input */
+#rph-bar { flex-wrap: wrap; }
+#rph-pend { flex: 0 0 100%; display: flex; gap: 6px; overflow-x: auto; padding: 2px 0 4px; scrollbar-width: none; }
+#rph-pend[hidden] { display: none; }
+#rph-pend::-webkit-scrollbar { display: none; }
+.rph-pend-item { position: relative; flex: none; width: 46px; height: 46px; border-radius: 9px; overflow: hidden;
+    background: rgba(255, 255, 255, .08); border: 1px solid rgba(150, 195, 255, .3); animation: rph-pend-in .22s ease-out both; }
+.rph-pend-item img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.rph-pend-item.file { width: auto; max-width: 132px; display: flex; align-items: center; gap: 5px; padding: 0 22px 0 8px; font-size: 11px; color: #dbe7ff; }
+.rph-pend-item.file span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rph-pend-x { position: absolute; top: 2px; right: 2px; width: 16px; height: 16px; padding: 0; border: 0; border-radius: 50%;
+    display: grid; place-items: center; font-size: 9px; line-height: 1; cursor: pointer;
+    background: rgba(0, 0, 0, .62); color: #fff; transition: transform .15s, background .15s; }
+.rph-pend-x:hover { transform: scale(1.12); background: rgba(200, 40, 60, .9); }
+@keyframes rph-pend-in { from { opacity: 0; transform: scale(.85); } }
+@media (prefers-reduced-motion: reduce) { .rph-pend-item { animation: none; } }
+.rph-phone .rph-pend-item { border-color: var(--ph-accent-soft); background: var(--ph-field-bg); }
+.rph-phone .rph-pend-item.file { color: var(--ph-field-ink); }
 .rph-imgwrap { border-radius: 10px; overflow: hidden; line-height: 0; }
 .rph-img { max-width: 100%; max-height: 220px; display: block; border-radius: 10px; }
 .rph-filebox { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-radius: 10px; background: rgba(142, 197, 255, 0.12); border: 1px solid rgba(142, 197, 255, 0.25); }
@@ -128,6 +146,14 @@
 #rph-roster.visible { opacity: 1; pointer-events: auto; transform: translateY(0); }
 #rph-roster::-webkit-scrollbar { width: 6px; }
 #rph-roster::-webkit-scrollbar-thumb { background: rgba(150, 195, 255, 0.35); border-radius: 3px; }
+/* the scrollbar in the skin's colours: Chrome draws its own grey bar once scrollbar-width is set,
+   so the colour is given the standard way too (thumb, then the track) */
+#rph-roster, #rph-diary-panel, #rph-diary-panel .rph-diary-list { scrollbar-color: rgba(150, 195, 255, .38) transparent; }
+body[data-rph-skin="cute"] #rph-roster, body[data-rph-skin="cute"] #rph-diary-panel, body[data-rph-skin="cute"] #rph-diary-panel .rph-diary-list { scrollbar-color: #ffb3cc transparent; }
+body[data-rph-skin="goth"] #rph-roster, body[data-rph-skin="goth"] #rph-diary-panel, body[data-rph-skin="goth"] #rph-diary-panel .rph-diary-list { scrollbar-color: rgba(212, 175, 55, .5) transparent; }
+body[data-rph-skin="lace"] #rph-roster, body[data-rph-skin="lace"] #rph-diary-panel, body[data-rph-skin="lace"] #rph-diary-panel .rph-diary-list { scrollbar-color: rgba(201, 164, 92, .55) transparent; }
+body[data-rph-skin="modern"] #rph-roster, body[data-rph-skin="modern"] #rph-diary-panel, body[data-rph-skin="modern"] #rph-diary-panel .rph-diary-list { scrollbar-color: #c7c7cc transparent; }
+@media (prefers-color-scheme: dark) { body[data-rph-skin="modern"] #rph-roster, body[data-rph-skin="modern"] #rph-diary-panel, body[data-rph-skin="modern"] #rph-diary-panel .rph-diary-list { scrollbar-color: #48484a transparent; } }
 
 .rph-roster-title { font-weight: 700; font-size: 0.95rem; color: #bcd8ff; margin-bottom: 8px; }
 .rph-hint { font-size: 0.75rem; opacity: 0.65; margin-bottom: 8px; }
@@ -768,9 +794,15 @@ body[data-rph-skin="modern"] #rph-btn { background: linear-gradient(145deg, #3a3
 .rph-settings .checkbox_label { margin: 4px 0; }
 .rph-settings .text_pole { width: 100%; box-sizing: border-box; margin: 2px 0 6px; }
 .rph-settings textarea.text_pole { font-size: .85em; line-height: 1.4; resize: vertical; }
-.rph-settings .rph-row { display: flex; gap: 8px; align-items: flex-end; }
+.rph-settings .rph-row { display: flex; gap: 8px; align-items: flex-end; padding: 0; border-radius: 0; }
+.rph-settings .rph-row:hover { background: none; }   /* the "who is online" rows share the class name; their padding and hover are not for here */
 .rph-settings .rph-row > div { flex: 1; min-width: 0; }
 .rph-settings .rph-row > .rph-narrow { flex: 0 0 50%; }
+.rph-settings .rph-row:has(> div > input[type="number"]) { display: block; padding: 0; margin: 0; }
+.rph-settings .rph-row > div:has(> input[type="number"]) { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 3px 0; }
+.rph-settings .rph-row > div:has(> input[type="number"]) > label { flex: 1; min-width: 0; margin: 0; font-size: .9em; line-height: 1.25; }
+.rph-settings .rph-row > div:has(> input[type="number"]) > input[type="number"] { flex: 0 0 76px; width: 76px; margin: 0; text-align: center; }
+.rph-settings .rph-row > div:has(> select) { margin-top: 2px; }
 .rph-settings .rph-slider { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
 .rph-settings .rph-slider label { margin: 0; min-width: 92px; }
 .rph-settings .rph-slider input[type="range"] { flex: 1; min-width: 0; }
@@ -779,17 +811,29 @@ body[data-rph-skin="modern"] #rph-btn { background: linear-gradient(145deg, #3a3
 .rph-settings .rph-btnrow .menu_button { margin: 0; width: auto; }
 .rph-settings #rph-apinote[data-kind="ok"] { color: #6fae5a; opacity: 1; }
 .rph-settings #rph-apinote[data-kind="bad"] { color: #d0584a; opacity: 1; }
-.rph-settings .rph-sub { margin: 6px 0; border: 1px solid rgba(255, 255, 255, .08); border-radius: 8px; background: rgba(255, 255, 255, .02); }
-.rph-settings .rph-sub > .inline-drawer-header { padding: 6px 10px; }
-.rph-settings .rph-sub > .inline-drawer-content { padding: 4px 10px 10px; }
+.rph-settings .rph-sub { margin: 8px 0; border: 1px solid var(--SmartThemeBorderColor, rgba(255, 255, 255, .15)); border-radius: 8px; background: rgba(0, 0, 0, .12); }
+/* framed sections, the same as in Vitals and Living Scene */
+.rph-settings .rph-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 2px 0 6px; }
+.rph-settings .rph-top .checkbox_label { margin: 0; }
+.rph-settings .rph-top select.text_pole { width: auto; margin: 0; }
+.rph-settings .rph-box { margin: 8px 0; border: 1px solid var(--SmartThemeBorderColor, rgba(255, 255, 255, .15)); border-radius: 8px; padding: 8px 10px 10px; background: rgba(0, 0, 0, .12); }
+.rph-settings .rph-boxhead { font-weight: 700; margin: 0 0 6px; opacity: .92; }
+.rph-settings .rph-box > label:not(.checkbox_label):first-of-type { margin-top: 0; }
+.rph-settings .rph-sub { padding: 8px 10px; }
+/* the foldable sections: the head is the frame's own title line — a theme's header bar
+   (its background, border, shadow, margins) must not draw a second frame inside */
+.rph-settings .rph-sub > .inline-drawer-header { padding: 0; margin: 0; min-height: 0; background: none; border: 0; border-radius: 0; box-shadow: none; outline: 0; }
+.rph-settings .rph-sub > .inline-drawer-header b { font-weight: 700; opacity: .92; }
+.rph-settings .rph-sub > .inline-drawer-header .inline-drawer-icon { margin: 0; }
+.rph-settings .rph-sub > .inline-drawer-content { padding: 8px 0 2px; }
 
 /* skin picker: four little phones */
-.rph-settings .rph-skins { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 5px; margin: 2px 0 6px; }
+.rph-settings .rph-skins { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 4px; margin: 2px 0 6px; }
 .rph-skintile span:last-child { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
 .rph-skintile {
     display: flex; flex-direction: column; align-items: center; gap: 5px;
-    padding: 8px 4px 6px; border-radius: 10px; cursor: pointer;
-    background: rgba(255, 255, 255, .03); color: inherit; font: inherit; font-size: .85em;
+    padding: 3px 1px 2px; border-radius: 7px; cursor: pointer; gap: 2px; min-width: 0;
+    background: rgba(255, 255, 255, .03); color: inherit; font: inherit; font-size: .7em; letter-spacing: -.01em; line-height: 1.2;
     border: 1px solid var(--SmartThemeBorderColor, rgba(128, 128, 128, .35));
     transition: border-color .15s, background .15s, transform .15s;
 }

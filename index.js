@@ -153,8 +153,8 @@ const defaults = {
     state: {},              // contactId -> {lastInitiative, todayCount, dayStamp, ignored}
     unread: {},             // contactId -> unread counter
     diaries: {},            // contactId -> [{ts, date, mood, text}] — the PHONE's own diary
-    cast: {},               // card name -> "Kai Lis, Rufus, Мэй": people who live inside one RP card
-    aliases: {},            // card name -> "Уильям, Уилл": other ways the model writes that name (2.0.1)
+    cast: {},               // card name -> "Sam Lee, Mark, Анна": people who live inside one RP card
+    aliases: {},            // card name -> "Алекс, Ал": other ways the model writes that name (2.0.1)
     looks: {},              // person -> { useAvatar, refKey, desc }: who they look like on photos
     current: ''             // the conversation currently open
 };
@@ -224,8 +224,8 @@ function saveSettings() {
 const L = {
     ru: {
         set_img: 'Фото от персонажей', img_on: 'Рисовать фото, которые они присылают', img_auto: 'Сразу, как пришло',
-        img_type: 'Тип API', img_t_auto: 'Определить автоматически', img_t_openai: 'OpenAI images (/images/generations · NavyAI, SD-прокси)',
-        img_t_or: 'OpenRouter / chat image (nano-banana, grok)', img_t_comfy: 'ComfyUI — локально, на своей видеокарте',
+        img_type: 'Тип API', img_t_auto: 'Определить автоматически', img_t_openai: 'OpenAI — картинки (/images/generations · NavyAI, SD-прокси)',
+        img_t_or: 'OpenRouter / картинка из чата (nano-banana, grok)', img_t_comfy: 'ComfyUI — локально, на своей видеокарте',
         img_url: 'URL API картинок', img_key: 'Ключ API картинок', img_model: 'Модель', img_model_ph: 'например flux-schnell или google/gemini-2.5-flash-image',
         img_size: 'Размер', img_style: 'Стиль', img_style_ph: 'например: аниме, мягкий свет', img_tpl: 'Промпт фото · {CAPTION} {NAME} {LOOK} {STYLE}',
         img_borrowed: 'Подключение взято из Кроличьей норы.', img_develop: 'Проявить', img_drawing: 'Рисую…', img_retry: 'Не вышло — нажми, чтобы повторить',
@@ -252,14 +252,14 @@ const L = {
         look_ph: 'Внешность: глаза, волосы — длина и цвет, телосложение, одежда…', look_scan: '👁 Распознать по картинке', look_scanning: 'Смотрю…',
         look_noref: 'Нет картинки — загрузи свою или включи аватарку.', look_err: 'Не вышло распознать: {m}. Нужна модель, которая видит картинки (например Gemini).',
         look_src_own: 'своя картинка', look_src_lens: 'из Линзы', look_src_ava: 'аватарка', look_src_none: 'без картинки — только описание',
-        cast_title: 'Персонажи внутри этой карточки', cast_ph: 'Имена персонажей карточки, через запятую', alias_ph: 'Ещё зовут: Уильям, Уилл, Руфус = Rufus',
+        cast_title: 'Персонажи внутри этой карточки', cast_ph: 'Кто в карточке: имя, имя', alias_ph: 'Другие имена: прозвище, …', cast_tip: 'Имена персонажей карточки, через запятую', alias_tip: 'Как ещё модель пишет это имя: прозвища, сокращения. Для персонажа внутри карточки: Другое имя = Персонаж',
         msg_edit: 'Изменить', msg_del: 'Удалить', msg_del_sure: 'Нажмите ещё раз, чтобы удалить', msg_save: 'Сохранить (Enter)', msg_cancel: 'Отмена (Esc)', set_preset: 'Шаблон', pr_main: 'Основной', pr_short: 'Короткие ответы', pr_custom: 'Свой',
         set_quiet_to: 'до', set_memory: 'Память', set_test: 'Проверить связь', api_hint: 'Пусто — возьмётся ключ Tavern RPG Engine.',
         api_borrowed: 'Ключ взят из {src}', api_nokey: 'Ключа нет — впиши свой или включи Tavern RPG Engine.',
         api_wait: 'проверяю…', api_badkey: 'Ключ не подошёл.', api_http: 'Провайдер ответил {n}.', api_ok: '✓ на связи',
         api_nomodel: 'модели {m} у провайдера нет', api_unreach: 'Не достучаться до {url}',
         title: 'Телефон', hdr: 'RPG Телефон',
-        ph: 'Написать…', roster: 'Кто на связи', no_chars: 'Нет доступных персонажей.',
+        ph: 'Написать…', caption_ph: 'Подпись к фото…', pend_remove: 'Убрать', roster: 'Кто на связи', no_chars: 'Нет доступных персонажей.',
         set_enable: 'Включить телефон', set_lang: 'Язык', set_api: 'API',
         set_url: 'URL — https://openrouter.ai/api/v1', set_key: 'API-ключ', set_model: 'Модель — например google/gemma-4-31b-it', set_temp: 'Температура',
         set_ctx: 'Контекст, токены', set_msgs: 'Из основного чата',
@@ -320,14 +320,14 @@ const L = {
         look_ph: 'Looks: eyes, hair length and colour, build, outfit…', look_scan: '👁 Read from the picture', look_scanning: 'Looking…',
         look_noref: 'No picture — upload one or enable the avatar.', look_err: 'Could not read it: {m}. This needs a model that can see images (e.g. Gemini).',
         look_src_own: 'own picture', look_src_lens: 'from Lens', look_src_ava: 'avatar', look_src_none: 'no picture — description only',
-        cast_title: 'Characters inside this card', cast_ph: 'Names of the characters in this card, comma-separated', alias_ph: 'Also called: Will, Уильям, Руфус = Rufus',
+        cast_title: 'Characters inside this card', cast_ph: 'In this card: name, name', alias_ph: 'Other names: nickname, …', cast_tip: 'Names of the characters in this card, comma-separated', alias_tip: 'Other ways the model writes this name: nicknames, short names. For someone inside the card: Other name = Character',
         msg_edit: 'Edit', msg_del: 'Delete', msg_del_sure: 'Click again to delete', msg_save: 'Save (Enter)', msg_cancel: 'Cancel (Esc)', set_preset: 'Template', pr_main: 'Main', pr_short: 'Short replies', pr_custom: 'My own',
         set_quiet_to: 'to', set_memory: 'Memory', set_test: 'Test connection', api_hint: 'Empty — the Tavern RPG Engine key is used.',
         api_borrowed: 'Key borrowed from {src}', api_nokey: 'No key — enter one or enable Tavern RPG Engine.',
         api_wait: 'checking…', api_badkey: 'The key was rejected.', api_http: 'The provider answered {n}.', api_ok: '✓ connected',
         api_nomodel: 'the provider has no model {m}', api_unreach: 'Cannot reach {url}',
         title: 'Phone', hdr: 'RPG Phone',
-        ph: 'Type a message…', roster: 'Who is online', no_chars: 'No characters available.',
+        ph: 'Type a message…', caption_ph: 'Add a caption…', pend_remove: 'Remove', roster: 'Who is online', no_chars: 'No characters available.',
         set_enable: 'Enable the phone', set_lang: 'Language', set_api: 'API',
         set_url: 'URL — https://openrouter.ai/api/v1', set_key: 'API key', set_model: 'Model — e.g. google/gemma-4-31b-it', set_temp: 'Temperature',
         set_ctx: 'Context, tokens', set_msgs: 'From the main chat',
@@ -399,14 +399,14 @@ function stripNamePrefix(text, names) {
     const s = String(text || '');
     const list = (Array.isArray(names) ? names : [names]).map(n => String(n || '').trim().toLowerCase()).filter(Boolean);
     if (!list.length) return s;
-    if (/^\s*\[/.test(s) && !/^\s*\[[^\]]*\]\s*[:：]/.test(s)) return s;   // "[William: печатает…]" is a remark
+    if (/^\s*\[/.test(s) && !/^\s*\[[^\]]*\]\s*[:：]/.test(s)) return s;   // "[Alex: печатает…]" is a remark
     const m = RE_NAME_HEAD.exec(s);
     return m && list.includes(m[1].trim().toLowerCase()) ? s.slice(m[0].length) : s;
 }
 // "Name:", "**Name:**", "**Name**:", "*Name:*", "__Name__:", "[Name]:", "Name：" — a name of
 // up to 40 characters at the very start of a line, its colon, and whatever wraps them
 // (2.0.2) the name starts and ends on a character, so the spaces around it can be read
-// only one way — "   William   :" with thousands of spaces used to take seconds
+// only one way — "   Alex   :" with thousands of spaces used to take seconds
 const RE_NAME_HEAD = /^\s*(?:(?:\*\*|__|\*|_)\s*)?\[?([^:：\[\]*_\s](?:[^:：\[\]*_\n]{0,38}[^:：\[\]*_\s])?)\]?\s*(?:(?:\*\*|__|\*|_)\s*)?[:：](?:\s*(?:\*\*|__|\*|_)(?=\s))?\s*(?=\S)/u;
 
 // NOTE on \p{L}: JavaScript's \w is ASCII-only, so "голосов\w*" matched just "голосов"
@@ -454,12 +454,12 @@ function mediaMatch(re, s) {
     return m ? { caption: (m[1] ?? m[2] ?? '').trim(), rest: (m[3] || '').trim() } : null;
 }
 
-// "Kai Lis: [voice message: …]" — a sender name of one to three capitalised words
+// "Sam Lee: [voice message: …]" — a sender name of one to three capitalised words
 // (spaces allowed) in front of the line. Used to recognise a speaker the card does not
 // name (an NPC of a world card) and to see the media tag behind such a prefix.
 // BUG FIX (2.0.1): "[Фото: закат]" on a line of its own was read as a sender called
-// "Фото" saying "закат]" — a bracket in front of a name now needs its pair ("[Kai]:").
-// A full-width colon "Kai：" counts as a colon.
+// "Фото" saying "закат]" — a bracket in front of a name now needs its pair ("[Sam]:").
+// A full-width colon "Sam：" counts as a colon.
 const RE_SENDER_NAME = "\\p{Lu}[\\p{L}\\p{M}'’.\\-]*(?:\\s\\p{Lu}[\\p{L}\\p{M}'’.\\-]*){0,2}";
 const RE_SENDER = new RegExp(`^(?:\\[(${RE_SENDER_NAME})\\]|(${RE_SENDER_NAME}))\\s*[:：]\\s*(.+)$`, 'u');
 function splitSender(line) {
@@ -469,9 +469,9 @@ function splitSender(line) {
     return { name, rest: m[3].trim() };
 }
 
-// A world card writes "Академия…: Kai Lis: text" — a second name behind the card's.
+// A world card writes "Академия…: Sam Lee: text" — a second name behind the card's.
 // Taken as the real sender when it is a known character or a two-to-three-word name
-// ("Kai Lis"); a single capitalised word ("Note: …") is too risky to read as a name.
+// ("Sam Lee"); a single capitalised word ("Note: …") is too risky to read as a name.
 function nestedSender(text, extra) {
     const sp = splitSender(text);
     if (!sp || sp.rest.length < 1) return null;
@@ -484,7 +484,7 @@ function nestedSender(text, extra) {
 /* ONE CARD, MANY PEOPLE (2.0.0). An RP card can hold a whole cast. Who lives in it comes
    from two places: the names you list for that card in «Кто на связи», and the people
    RPG Diary has already filed in its NPC dossiers for that character. Those names are
-   always read as senders, single-word ones too ("Rufus: …"). */
+   always read as senders, single-word ones too ("Mark: …"). */
 function castList(name) {
     const out = [];
     const add = n => { n = String(n || '').trim().slice(0, 32); if (n && n !== name && !out.some(x => x.toLowerCase() === n.toLowerCase())) out.push(n); };
@@ -498,7 +498,7 @@ function castList(name) {
     return out.slice(0, 30);
 }
 /* (2.0.2) Other ways the model writes a name, kept per card in «Ещё зовут»:
-   "Уильям, Уилл" are the card itself; "Руфус = Rufus" is someone living inside it. */
+   "Алекс, Ал" are the card itself; "Марк = Mark" is someone living inside it. */
 function aliasPairs(card) {
     return String(settings.aliases?.[card] || '').split(/[,;\n]/).map(x => x.trim()).filter(Boolean).map(x => {
         const i = x.indexOf('=');
@@ -531,7 +531,7 @@ function castOfContact(id) {
 // classify a line into a bubble kind; media keeps its caption AND any spoken text
 function classify(text) {
     let s = String(text || '').trim();
-    // BUG FIX (2.0.0): a media tag behind a sender name ("Kai Lis: [sent a photo: …]")
+    // BUG FIX (2.0.0): a media tag behind a sender name ("Sam Lee: [sent a photo: …]")
     // was shown as plain text — the tag must start the line to be recognised
     if (s && s[0] !== '[') { const sp = splitSender(s); if (sp && /^[\[(*_]/.test(sp.rest)) s = sp.rest; }
     const t = unwrapEmphasis(s);
@@ -543,7 +543,7 @@ function classify(text) {
     if (m) return { type: 'file', text: m.rest, caption: m.caption };
     m = mediaMatch(RE_SYSTEM, t);
     if (m) return { type: 'system', text: [m.caption, m.rest].filter(Boolean).join(' '), caption: '' };
-    // (2.0.1) "[William печатает… с мягкой, глубокой нежностью]" — a remark, not words:
+    // (2.0.1) "[Alex печатает… с мягкой, глубокой нежностью]" — a remark, not words:
     // on its own it is a status line, in front of words it heads the bubble in italics
     const n = t[0] === '[' ? /^\[([^\]]*)\]([\s\S]*)$/.exec(t) : null;
     if (n && /\p{L}/u.test(n[1])) return { type: 'note', text: n[2].trim(), caption: n[1].trim() };
@@ -848,6 +848,17 @@ function contactList() {
     if (gid && !list.includes(gid) && settings.active[gid]) list.unshift(gid);
     return list;
 }
+// BUG FIX: the corner counter could show 2 while the phone had no messages: it added up what
+// was left over for contacts since switched off and for messages since deleted. Now only the
+// contacts in the phone count, and never more than the messages from them that are really there.
+function unreadOf(id) {
+    const n = Number(settings.unread[id]) || 0;
+    if (!n) return 0;
+    const th = Array.isArray(settings.threads[id]) ? settings.threads[id] : [];
+    let theirs = 0;
+    for (const m of th) if (m && m.who !== 'user') theirs++;
+    return Math.min(n, theirs);
+}
 function currentContact() {
     const list = contactList();
     if (!list.length) return null;
@@ -1010,8 +1021,8 @@ function diaryPersonaOf(name) {
 /* ============================================================
    CONTEXT from the main chat + the character card
    ============================================================ */
-// BUG FIX (1.9.0). The open chat's tail went to EVERY contact: text William while
-// Hitori's chat is open, and William got Hitori's story as "what is happening right
+// BUG FIX (1.9.0). The open chat's tail went to EVERY contact: text Alex while
+// Nina's chat is open, and Alex got Nina's story as "what is happening right
 // now". The story is now passed only to characters who are really in the open chat —
 // the same check the diary already used (openChatHas).
 function mainChatContext(names, count) {
@@ -2065,14 +2076,14 @@ function parseReply(raw, allowed, extra = []) {
     for (const line of cleanReplyText(raw).split('\n')) {
         let s = line.trim();
         if (!s) continue;
-        // "- Rufus: …", "> Rufus: …" — the marker goes, the line is Rufus's
+        // "- Mark: …", "> Mark: …" — the marker goes, the line is Mark's
         if (LIST_MARK.test(s)) {
             const bare = s.replace(LIST_MARK, '');
             const h = RE_NAME_HEAD.exec(bare), sp = splitSender(bare);
             if ((h && known(h[1])) || (sp && /\s/.test(sp.name))) s = bare;
         }
-        // (2.0.1) "[William: печатает…]" is a remark in brackets, not William saying "печатает…]" —
-        // a name in front of a bracket needs its pair ("[William]: …"); "[SYSTEM: …]" stays an event
+        // (2.0.1) "[Alex: печатает…]" is a remark in brackets, not Alex saying "печатает…]" —
+        // a name in front of a bracket needs its pair ("[Alex]: …"); "[SYSTEM: …]" stays an event
         const m = s[0] === '[' && !/^\[[^\]]*\]\s*[:：]/.test(s) && !/^\[\s*(?:system|система)(?!\p{L})/iu.test(s) ? null : RE_NAME_HEAD.exec(s);
         let who = null, text = s;
         if (m) {
@@ -2081,7 +2092,7 @@ function parseReply(raw, allowed, extra = []) {
             const via = byAlias(cand, allowed);      // «Ещё зовут»: the card, or someone inside it
             const same = x => n => n.toLowerCase() === String(x || '').toLowerCase();
             const hit = allowed.find(same(cand)) || (via && allowed.find(same(via)));
-            // BUG FIX (2.0.0): "[SYSTEM: Kai went offline]" lost its opening bracket here and
+            // BUG FIX (2.0.0): "[SYSTEM: Sam went offline]" lost its opening bracket here and
             // showed up as an ordinary bubble ending in a stray "]" — the event is kept whole
             // (2.0.1: "СИСТЕМА:" too)
             if (/^(?:system|система)$/i.test(cand)) { who = 'SYSTEM'; text = s.startsWith('[') ? s : `[SYSTEM: ${rest}]`; }
@@ -2092,22 +2103,22 @@ function parseReply(raw, allowed, extra = []) {
             else if (you && cand.toLowerCase() === you) { last = null; continue; }
             else if (hit) {
                 who = hit; text = rest;
-                // BUG FIX (2.0.0): "Академия…: Kai Lis: …" — the speaker's name stayed in the text
+                // BUG FIX (2.0.0): "Академия…: Sam Lee: …" — the speaker's name stayed in the text
                 const ns = nestedSender(text, extra);
                 if (ns) { who = ns.name; text = ns.rest; }
             } else {
-                // someone who lives inside the card ("Rufus: …")
+                // someone who lives inside the card ("Mark: …")
                 const inCast = extra.find(same(cand)) || (via && (extra.find(same(via)) || via));
                 if (inCast) { who = inCast; text = rest; }
             }
         }
         // BUG FIX (2.0.0): a world/group card speaks as people the card itself does not
-        // name ("Kai Lis" inside "Академия …"). Their name stayed inside the text, so the
-        // line showed "Kai Lis: [voice message …]" raw. A capitalised name of up to three
+        // name ("Sam Lee" inside "Академия …"). Their name stayed inside the text, so the
+        // line showed "Sam Lee: [voice message …]" raw. A capitalised name of up to three
         // words is now taken as the sender.
         if (!who) { const sp = splitSender(s); if (sp) { who = sp.name; text = sp.rest; } }
         if (!who) {
-            // BUG FIX (2.0.1): a second line of Rufus's went to the card's owner — a line with
+            // BUG FIX (2.0.1): a second line of Mark's went to the card's owner — a line with
             // no name now goes on in the voice of whoever spoke just before it
             who = last || allowed[0];
         }
@@ -2219,7 +2230,7 @@ function thumbOf(file) {
         fr.readAsDataURL(file);
     });
 }
-async function sendAttachments(fileList) {
+async function sendAttachments(fileList, onAccepted) {
     const cur = currentContact();
     if (!cur) { toastr.info(t('noactive')); return; }
     if (!apiKey()) { toastr.warning(t('nokey')); return; }
@@ -2231,6 +2242,7 @@ async function sendAttachments(fileList) {
 
     const names = contactMembers(cur);
     if (!names.length) { toastr.info(t('noactive')); return; }
+    if (onAccepted) onAccepted();   // every check passed: the waiting tray can let them go
 
     const rq = beginRequest(cur); renderBubbles();
     const you = name1 || 'You';
@@ -2276,6 +2288,55 @@ async function sendAttachments(fileList) {
     finishRequest(rq);
     scrollOffset = 0;
     renderBubbles();
+}
+
+/* Picked photos and files wait above the input (2.0.3): write a caption, then send — the
+   way a messenger does. ✕ takes one back. Sending goes through sendAttachments as before;
+   what is typed in the input still goes along as the caption. */
+let pendingFiles = [];   // [{ file, url }] — url: a local preview of a picture, revoked when it leaves
+function renderPending() {
+    const box = document.getElementById('rph-pend');
+    if (!box) return;
+    box.textContent = '';
+    box.hidden = !pendingFiles.length;
+    pendingFiles.forEach((p, i) => {
+        const it = document.createElement('div');
+        it.className = 'rph-pend-item' + (p.url ? '' : ' file');
+        it.title = p.file.name;
+        if (p.url) { const im = document.createElement('img'); im.src = p.url; im.alt = ''; im.draggable = false; it.appendChild(im); }
+        else { const ic = document.createElement('i'); ic.className = 'fa-solid fa-file-lines'; const nm = document.createElement('span'); nm.textContent = p.file.name; it.append(ic, nm); }
+        const x = document.createElement('button');
+        x.type = 'button'; x.className = 'rph-pend-x'; x.textContent = '✕';
+        x.title = t('pend_remove'); x.setAttribute('aria-label', t('pend_remove'));
+        x.addEventListener('click', e => { e.stopPropagation(); dropPending(i); });
+        it.appendChild(x);
+        box.appendChild(it);
+    });
+    $('#rph-input').attr('placeholder', t(pendingFiles.length ? 'caption_ph' : 'ph'));
+}
+function addPending(list) {
+    const all = Array.from(list || []);
+    const room = Math.max(0, MAX_ATTACH - pendingFiles.length);
+    if (all.length > room) toastr.info(t('attach_limit'));
+    for (const f of all.slice(0, room)) pendingFiles.push({ file: f, url: /^image\//.test(f.type || '') ? URL.createObjectURL(f) : '' });
+    renderPending();
+    const inp = document.getElementById('rph-input');
+    if (inp) inp.focus();
+}
+function dropPending(i) {
+    const p = pendingFiles.splice(i, 1)[0];
+    if (p && p.url) URL.revokeObjectURL(p.url);
+    renderPending();
+}
+function clearPending() {
+    for (const p of pendingFiles) if (p.url) URL.revokeObjectURL(p.url);
+    pendingFiles = [];
+    renderPending();
+}
+// the send button and Enter: the waiting attachments with the caption, or just the text
+function sendFromBar() {
+    if (pendingFiles.length) { sendAttachments(pendingFiles.map(p => p.file), clearPending); return; }
+    sendUserText($('#rph-input').val());
 }
 
 /* ============================================================
@@ -2468,6 +2529,13 @@ function initiativeTick() {
    UI — a floating arc of bubbles on the right, wheel-scrolled,
    older ones fading out
    ============================================================ */
+// BUG FIX: right after a page reload the phone could draw before SillyTavern had loaded the
+// cards, and the pictures stayed initials until another contact was opened. The picture each
+// contact has now counts in the "did anything change" checks, so it shows once the cards load.
+function avaKey(name) {
+    const ch = characters.find(c => c.name === name);
+    return ch && ch.avatar ? ch.avatar : '';
+}
 function avatarHtml(name) {
     const ch = characters.find(c => c.name === name);
     if (ch && ch.avatar) return `<img class="rph-ava" src="/thumbnail?type=avatar&file=${encodeURIComponent(ch.avatar)}" draggable="false">`;
@@ -2497,6 +2565,7 @@ function ensureLayer() {
                 <div id="rph-tabs"></div>
                 <div id="rph-stack"></div>
                 <div id="rph-bar">
+                    <div id="rph-pend" hidden></div>
                     <i class="fa-solid fa-book" id="rph-diary-btn"></i>
                     <i class="fa-solid fa-paperclip" id="rph-attach"></i>
                     <input type="file" id="rph-file" multiple style="display:none">
@@ -2523,15 +2592,15 @@ function ensureLayer() {
         $('#rph-attach').on('click', () => { const f = document.getElementById('rph-file'); if (f && !busy) f.click(); });
         $('#rph-file').on('change', function () {
             const files = this.files;
-            if (files && files.length) sendAttachments(files);
+            if (files && files.length) addPending(files);
             this.value = '';   // the same files can be picked again next time
         });
         // the input is cleared by sendUserText itself, only after every check has passed —
         // clearing it here used to silently destroy the text when sending was not possible
-        $('#rph-send').on('click', () => sendUserText($('#rph-input').val()));
+        $('#rph-send').on('click', () => sendFromBar());
         $('#rph-input').on('keydown', (e) => {
             e.stopPropagation();
-            if (e.key === 'Enter') sendUserText($(e.target).val());
+            if (e.key === 'Enter') sendFromBar();
         });
         $('#rph-contacts').on('click', () => { renderRoster(); $('#rph-roster').toggleClass('visible'); });
         $('#rph-min').on('click', () => {
@@ -2543,7 +2612,7 @@ function ensureLayer() {
         document.getElementById('rph-stack').addEventListener('click', onStackClick);
         document.getElementById('rph-stack').addEventListener('scroll', onStackScroll, { passive: true });
     }
-    $('#rph-input').attr('placeholder', t('ph'));
+    $('#rph-input').attr('placeholder', t(pendingFiles.length ? 'caption_ph' : 'ph'));
     $('#rph-diary-btn').attr('title', t('diary_btn'));
     $('#rph-attach').attr('title', t('attach'));
     $('#rph-contacts').attr('title', t('contacts'));
@@ -2664,7 +2733,8 @@ function renderPhoneTop(cur) {
     const label = cur ? contactLabel(cur) : t('title');
     const avaHtml = !cur ? '<span class="rph-ava rph-ava-npc"><i class="fa-solid fa-mobile-screen-button"></i></span>'
         : isGroup(cur) ? `<span class="rph-ava rph-ava-npc" style="background:#3c5a8a"><i class="fa-solid fa-users"></i></span>` : avatarHtml(cur);
-    if (ava.dataset.who !== String(cur || '')) { ava.innerHTML = avaHtml; ava.dataset.who = String(cur || ''); }
+    const who = String(cur || '') + '|' + (cur && !isGroup(cur) ? avaKey(cur) : '');
+    if (ava.dataset.who !== who) { ava.innerHTML = avaHtml; ava.dataset.who = who; }
     $('#rph-layer .rph-top-name').text(label);
     const typing = busy && cur && busyFor === cur;
     $('#rph-layer .rph-top-sub').text(typing ? t('typing') : (cur ? t('online') : '')).toggleClass('typing', !!typing);
@@ -2704,11 +2774,11 @@ function renderTabs() {
     const cur = currentContact();
     if (list.length < 2) { if (box.innerHTML) { box.innerHTML = ''; lastTabSig = ''; } box.style.display = 'none'; return; }
     box.style.display = '';
-    const tabSig = list.join('|') + '::' + cur + '::' + list.map(id => settings.unread[id] || 0).join(',');
+    const tabSig = list.join('|') + '::' + cur + '::' + list.map(id => unreadOf(id)).join(',') + '::' + list.map(id => isGroup(id) ? '' : avaKey(id)).join(',');
     if (tabSig === lastTabSig) return;   // nothing changed — don't touch the DOM
     lastTabSig = tabSig;
     box.innerHTML = list.map(id => {
-        const un = settings.unread[id] || 0;
+        const un = unreadOf(id);
         const label = contactLabel(id);
         const ava = isGroup(id) ? `<span class="rph-ava rph-ava-npc" style="background:#3c5a8a"><i class="fa-solid fa-users"></i></span>` : avatarHtml(id);
         return `<div class="rph-tab ${id === cur ? 'on' : ''}" data-id="${escapeHtml(id)}" title="${escapeHtml(label)}">
@@ -2763,7 +2833,7 @@ function renderBubbles(force) {
     const lastTs = th.length ? th[th.length - 1].ts : 0;
     const sig = [cur, th.length, lastTs, busy, scrollOffset, settings.bubbleWidth, settings.arcDepth,
         settings.visibleCount, settings.fade, settings.offsetRight, settings.offsetTop, settings.language,
-        settings.skin, settings.phoneSize, phoneWindow, genRev, !!imgCfg().enabled, busyFor, editRev].join('|');
+        settings.skin, settings.phoneSize, phoneWindow, genRev, !!imgCfg().enabled, busyFor, editRev, characters.length].join('|');
     if (sig === lastSig) {
         // same content: only the "5 min ago" labels age — update them in place
         const labels = stack.querySelectorAll('.rph-time');
@@ -2802,7 +2872,7 @@ function renderBubbles(force) {
         const age = total > 1 ? 1 - (i / (total - 1)) : 0;
         const opacity = (1 - age * fade).toFixed(2);
         const mine = m.who === 'user';
-        const ns = !mine ? nestedSender(m.text, castNow) : null;     // "Kai Lis: …" saved under the card's name
+        const ns = !mine ? nestedSender(m.text, castNow) : null;     // "Sam Lee: …" saved under the card's name
         const shownName = ns ? ns.name : m.name;
         const kind = classify(ns ? ns.rest : m.text);
 
@@ -3129,7 +3199,7 @@ function renderButton() {
     }
     btn.toggle(!!settings.enabled);
     // unread counter on the corner button while the phone is tucked away
-    const unread = phoneTucked() ? Object.values(settings.unread || {}).reduce((a, n) => a + (Number(n) || 0), 0) : 0;
+    const unread = phoneTucked() ? contactList().reduce((a, id) => a + unreadOf(id), 0) : 0;
     let badge = btn.find('.rph-btn-badge');
     if (unread) {
         if (!badge.length) badge = $('<span class="rph-btn-badge"></span>').appendTo(btn);
@@ -3211,15 +3281,15 @@ function renderRoster() {
         return `
         <div class="rph-row">
             ${avatarHtml(n)}
-            <span class="rph-row-name rph-open" data-open="${escapeHtml(n)}" title="${escapeHtml(t('open_chat'))}">${escapeHtml(n)}${settings.unread[n] ? ` <b class="rph-unread">•</b>` : ''}</span>
+            <span class="rph-row-name rph-open" data-open="${escapeHtml(n)}" title="${escapeHtml(t('open_chat'))}">${escapeHtml(n)}${settings.active[n] && unreadOf(n) ? ` <b class="rph-unread">•</b>` : ''}</span>
             ${settings.active[n] ? `<i class="fa-solid fa-image-portrait rph-look-btn" data-name="${escapeHtml(n)}" title="${escapeHtml(t('look_title'))}"></i>` : ''}
             ${settings.active[n] ? `<i class="fa-solid fa-user-group rph-cast-btn ${castN ? 'has' : ''}" data-name="${escapeHtml(n)}" title="${escapeHtml(t('cast_title'))}">${castN ? `<b>${castN}</b>` : ''}</i>` : ''}
             <div class="rph-toggle ${settings.active[n] ? 'on' : ''}" data-name="${escapeHtml(n)}"><div class="rph-knob"></div></div>
         </div>
         ${settings.active[n] ? `<div class="rph-lookrow" data-name="${escapeHtml(n)}" style="display:none"></div>` : ''}
         ${settings.active[n] ? `<div class="rph-castrow" data-name="${escapeHtml(n)}" style="display:none">
-            <input type="text" class="text_pole rph-cast-in" maxlength="400" placeholder="${escapeHtml(t('cast_ph'))}" value="${escapeHtml(castTxt)}">
-            <input type="text" class="text_pole rph-cast-in rph-alias-in" maxlength="600" placeholder="${escapeHtml(t('alias_ph'))}" value="${escapeHtml(String(settings.aliases[n] || ''))}">
+            <input type="text" class="text_pole rph-cast-in" maxlength="400" placeholder="${escapeHtml(t('cast_ph'))}" title="${escapeHtml(t('cast_tip'))}" value="${escapeHtml(castTxt)}">
+            <input type="text" class="text_pole rph-cast-in rph-alias-in" maxlength="600" placeholder="${escapeHtml(t('alias_ph'))}" title="${escapeHtml(t('alias_tip'))}" value="${escapeHtml(String(settings.aliases[n] || ''))}">
         </div>` : ''}`;
     }).join('');
     html += `<div class="rph-roster-actions"><button class="menu_button" id="rph-clear">${t('clear')}</button></div>`;
@@ -3251,7 +3321,7 @@ function renderRoster() {
     body.on('change.rph', '.rph-alias-in', function (e) {
         e.stopImmediatePropagation();           // not the cast list
         const n = String($(this).closest('.rph-castrow').data('name'));
-        // "Уильям, Уилл, Руфус = Rufus" — tidied; the card's own name is not an alias of itself
+        // "Алекс, Ал, Марк = Mark" — tidied; the card's own name is not an alias of itself
         const v = String($(this).val()).split(/[,;\n]/).map(x => {
             const i = x.indexOf('=');
             if (i < 0) return x.trim().slice(0, 32);
@@ -3385,12 +3455,12 @@ function settingsHtml() {
             <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
         </div>
         <div class="inline-drawer-content" id="rph-drawer" style="display:none;">
-            <label class="checkbox_label"><input type="checkbox" id="rph-enabled"><span>${t('set_enable')}</span></label>
+            <div class="rph-top">
+                <label class="checkbox_label"><input type="checkbox" id="rph-enabled"><span>${t('set_enable')}</span></label>
+                <select id="rph-lang" class="text_pole" title="${escapeHtml(t('set_lang'))}" aria-label="${escapeHtml(t('set_lang'))}"><option value="ru">Русский</option><option value="en">English</option></select>
+            </div>
 
-            <hr class="sysHR"><h4>🌐 ${t('set_lang')}</h4>
-            <select id="rph-lang" class="text_pole"><option value="ru">Русский</option><option value="en">English</option></select>
-
-            <hr class="sysHR"><h4>📱 ${t('set_skin')}</h4>
+            <div class="rph-box"><div class="rph-boxhead">📱 ${t('set_skin')}</div>
             <div class="rph-skins">${tile('arc', 'arc')}${tile('cute', 'cute')}${tile('goth', 'goth')}${tile('lace', 'lace')}${tile('modern', 'modern')}</div>
             <div class="rph-slider rph-phoneonly">
                 <label for="rph-size">${t('set_size')}</label>
@@ -3421,8 +3491,9 @@ function settingsHtml() {
                 <div><label for="rph-right">${t('set_right')}</label><input type="number" min="0" max="600" id="rph-right" class="text_pole"></div>
                 <div><label for="rph-top">${t('set_top')}</label><input type="number" min="0" max="600" id="rph-top" class="text_pole"></div>
             </div>
+            </div>
 
-            <hr class="sysHR"><h4>🔌 ${t('set_api')}</h4>
+            <div class="rph-box"><div class="rph-boxhead">🔌 ${t('set_api')}</div>
             <small>${t('api_hint')}</small>
             <input type="text" id="rph-base" class="text_pole" placeholder="${escapeHtml(t('set_url'))}">
             <input type="password" id="rph-key" class="text_pole" placeholder="${escapeHtml(t('set_key'))}" autocomplete="off">
@@ -3438,8 +3509,9 @@ function settingsHtml() {
             </div>
             <div class="rph-btnrow"><div id="rph-api-test" class="menu_button">${t('set_test')}</div></div>
             <small id="rph-apinote"></small>
+            </div>
 
-            <hr class="sysHR"><h4>🧠 ${t('set_memory')}</h4>
+            <div class="rph-box"><div class="rph-boxhead">🧠 ${t('set_memory')}</div>
             <div class="rph-row">
                 <div><label for="rph-msgs">${t('set_msgs')}</label><input type="number" min="0" max="50" id="rph-msgs" class="text_pole"></div>
                 <div><label for="rph-thmem">${t('set_thmem')}</label><input type="number" min="2" max="120" id="rph-thmem" class="text_pole"></div>
@@ -3448,8 +3520,9 @@ function settingsHtml() {
             <div class="rph-row">
                 <div class="rph-narrow"><label for="rph-diary-n">${t('set_diary_n')}</label><input type="number" min="0" max="10" id="rph-diary-n" class="text_pole"></div>
             </div>
+            </div>
 
-            <hr class="sysHR"><h4>⏰ ${t('set_init')}</h4>
+            <div class="rph-box"><div class="rph-boxhead">⏰ ${t('set_init')}</div>
             <label class="checkbox_label"><input type="checkbox" id="rph-init"><span>${t('set_init_on')}</span></label>
             <div class="rph-row">
                 <div><label for="rph-gap">${t('set_gap')}</label><input type="number" min="1" max="1440" id="rph-gap" class="text_pole"></div>
@@ -3461,12 +3534,13 @@ function settingsHtml() {
             </div>
             <label class="checkbox_label"><input type="checkbox" id="rph-notify"><span>${t('set_notify')}</span></label>
             <label class="checkbox_label"><input type="checkbox" id="rph-sound"><span>${t('set_sound')}</span></label>
+            </div>
 
-            <hr class="sysHR"><h4>🔊 ${t('set_voice')}</h4>
+            <div class="rph-box"><div class="rph-boxhead">🔊 ${t('set_voice')}</div>
             <label class="checkbox_label"><input type="checkbox" id="rph-tts"><span>${t('tts_on')}</span></label>
             <label class="checkbox_label"><input type="checkbox" id="rph-tts-auto"><span>${t('tts_auto')}</span></label>
+            </div>
 
-            <hr class="sysHR">
             <div class="inline-drawer rph-sub">
                 <div class="rph-subtoggle inline-drawer-header" style="cursor:pointer;">
                     <b>📷 ${t('set_img')}</b><div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div></div>
@@ -3812,6 +3886,9 @@ jQuery(() => {
     ['pointerdown', 'keydown'].forEach(ev => window.addEventListener(ev, markActivity, { passive: true }));
     eventSource.on(event_types.MESSAGE_SENT, markActivity);
     eventSource.on(event_types.CHAT_CHANGED, () => { scrollOffset = 0; renderButton(); renderBubbles(); });
+    // the cards' pictures: SillyTavern may finish loading the cards after the phone first drew
+    // (a page reload); one more look then, cheap — nothing is redrawn unless a picture changed
+    for (const ev of [event_types.APP_READY, event_types.CHARACTER_PAGE_LOADED]) if (ev) eventSource.on(ev, () => renderBubbles());
     let resizeT = null;
     window.addEventListener('resize', () => { clearTimeout(resizeT); resizeT = setTimeout(() => { if (isPhoneSkin()) renderBubbles(); }, 120); });
 
