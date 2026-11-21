@@ -1,5 +1,6 @@
 import { eventSource, event_types, saveSettingsDebounced, characters, name1, substituteParams } from '../../../../script.js';
 import { extension_settings, getContext } from '../../../extensions.js';
+import './suite-core.js';   // the suite's shared core: one seal for the floating buttons, the request queue, one "when and where"
 
 const MODULE_NAME = 'rpg_phone';
 
