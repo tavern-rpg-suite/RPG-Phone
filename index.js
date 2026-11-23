@@ -3,6 +3,11 @@ import { extension_settings, getContext } from '../../../extensions.js';
 import './suite-core.js';   // the suite's shared core: one seal for the floating buttons, the request queue, one "when and where"
 
 const MODULE_NAME = 'rpg_phone';
+const OWN_GROUP_PREFIX = '#grp:';   // a group chat made on the phone (2.1.0)
+const UNKNOWN_PREFIX = '#unk:';     // a message from an unknown number (2.1.0)
+const GROUP_MAX = 6;                // members in one group, as before
+const UNSAFE_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+const WALLET_DAILY = 10, WALLET_CAP = 300;   // (2.1.0) sparks a day, and the most the wallet holds
 
 /* ============================================================
    RPG PHONE
@@ -80,9 +85,45 @@ You are {{char}}, a fully autonomous character in a living, uncensored, mature w
 - Take initiative, ask questions when genuinely curious, react to the time and day, and never repeat yourself.
 - Always remain in character as {{char}}.`;
 
+// (2.1.1) asked for by the author: short-to-medium texts with emoji and kaomoji, otome romance
+// and everyday life, people with their own lives and ties to each other, no echoing,
+// less prickly. Kept short and plain so a small model follows it.
+const PROMPT_OTOME = `You are {{char}}, texting {{user}} on a magical phone between your world and theirs. {{user}} cannot reach you physically — it is only a chat.
+
+Write ONLY chat messages. No narration, no *actions*, no third person.
+
+## Style: otome romance & everyday life
+- 1–3 messages per reply. Each message 1–3 short sentences.
+- Use emoji and kaomoji the way YOUR character would: (｡•ᴗ•｡) (╥﹏╥) (¬‿¬) ✨🌙☕ — some people use many, some almost none.
+- Warm, playful, a little flirty, slow-burn. Soft teasing is fine; being cold, rude or dismissive for no reason is not.
+- Do not play everyone as a tsundere. Most people are simply kind, shy, cheerful, busy or awkward — be the person in your card.
+
+## ⚠️ NO ECHO
+- NEVER repeat, quote or paraphrase {{user}}'s last message back to them.
+- Do not start with "So you…", "You said…", "Oh, you…" and then restate what they wrote.
+- React to it with something NEW: your feeling, your news, a question, a joke, a change of topic.
+
+## You have your own life
+- {{user}} is not the center of your world. You have work, friends, plans, worries and hobbies.
+- Often mention what you are doing right now, or what just happened to you.
+- Sometimes you are busy and answer briefly, or later. You do not wait by the phone.
+- Other characters exist and have their own ties: friends, rivals, crushes, family, coworkers. Mention them, tease them, talk to them.
+
+## Format
+- Every line starts with the sender's name and a colon: \`{{char}}: ...\`
+- One message per line.
+- In a group chat, characters talk to EACH OTHER too, not only to {{user}}. Not everyone has to answer every time.
+- Media, sometimes (not every reply):
+  - \`{{char}}: [sent a photo: short description]\`
+  - \`{{char}}: [voice message: "short words"]\`
+  - \`[SYSTEM: {{char}} went offline]\`
+
+Stay in character as {{char}}. Never act like an assistant, never explain or summarize, and do not end every message with a question.`;
+
 const PROMPT_PRESETS = [
     { id: 'main', text: DEFAULT_PROMPT },
     { id: 'short', text: PROMPT_SHORT },
+    { id: 'otome', text: PROMPT_OTOME },
 ];
 
 /* PHOTO GENERATION — the same engine as the Rabbit Hole's portraits (cloud or ComfyUI),
@@ -157,12 +198,54 @@ const defaults = {
     cast: {},               // card name -> "Sam Lee, Mark, Анна": people who live inside one RP card
     aliases: {},            // card name -> "Алекс, Ал": other ways the model writes that name (2.0.1)
     looks: {},              // person -> { useAvatar, refKey, desc }: who they look like on photos
+    compress: true,         // (2.1.0) a long card is condensed once instead of being cut off at 1200 characters
+    compressOver: 400,      // …longer than this many tokens (the old cut sat at the same size)
+    briefs: {},             // the condensed cards, kept by card and the text they came from
+    phoneView: 'home',      // (2.1.0) phone skins: 'home' | 'messages' | 'contacts' | 'chat' — what the screen shows
+    muted: {},              // (2.1.5) contact -> true: does not write first or call, no sound; the feed still hears from them
+    invites: {},            // (2.1.4) contact -> { what, from, made, at, state: open|kept|missed }
+    catchupOn: true,        // (2.1.2) back after 6+ hours: what reached the phone meanwhile (one request a day)
+    catchupDay: '', lastSeen: 0,
+    chatterOn: false,       // (2.1.2) a quiet group talks among themselves now and then — off until switched on
+    chatterPerDay: 2, chatterDay: '', chatterCount: 0,
+    feedOn: false,          // (2.1.0) «Лента»: the people on the phone post about their day — off until switched on
+    feedEvery: 30,          // minutes between two batches of posts (only while the phone is out)
+    feedPerDay: 6,          // batches a day at most
+    feedPosts: 2,           // posts in one batch (1–3)
+    feed: null,             // { posts: [...], unseen, lastAt, dayStamp, todayCount } — filled in loadSettings
+    callChance: 17,         // (2.1.0) % of the times someone would text first that they call instead (0 = never)
+    voicemail: true,        // a missed call leaves a short voice message (one more request)
+    calls: [],              // the call log: [{ id, dir: 'in'|'out', ts, dur, missed }]
+    callsUnseen: 0,         // missed calls not looked at yet
+    moments: {},            // (2.1.0) «Вспомнить»: name -> { list: [{kind, text, when}], upto: ts of the last message read }
+    pairs: {},              // how two people relate: 'A\u0001B' -> { a_to_b, b_to_a, bond, stamp }
+    met: {},                // name -> when the phone first saw them write
+    mailOn: false,          // (2.1.0) Mail: now and then a letter from someone of this world — off until switched on
+    mail: [],               // [{ id, from, subject, text, kind, ts, read }]
+    mailLast: 0,            // when the last letter came (at most one a day)
+    songs: {},              // Music: person -> { list: [{ title, artist, why }], stamp }
+    wallet: 10,             // (2.1.0) Shop: the phone's own sparks — Vendors' coins are never touched
+    walletDay: '',          // the day the last daily sparks came
+    shop: null,             // { items: [{ id, name, desc, price }], day }
+    reminders: [],          // (2.1.0) Calendar: [{ id, date: 'YYYY-MM-DD', time: 'HH:MM'|'', text, fired }]
+    birthdays: {},          // name -> { day, month, stamp } found in their card ('' day = the card does not say)
+    favs: {},               // (2.1.0) Gallery: image key -> true (favourites)
+    voices: {},             // (2.1.0) person -> { voice: a Gemini TTS voice, manner: preset id or own words } — spoken on the phone
+    blocked: {},            // (2.1.0) id -> true: they neither write nor call; their chat sits under «Blocked» in Contacts
+    hidden: {},             // id -> true: a hidden chat — not in Messages, the home screen, the lock screen or the strip
+    unknownOn: false,       // SMS from unknown numbers (hints, warnings, wrong numbers, spam) — off until switched on
+    unknown: {},            // '#unk:id' -> { from, kind }
+    unknownLast: 0,         // when the last one came (at most one a day)
+    newsSeen: '',           // (2.1.0) the suite's news already looked at (so the lock screen shows only fresh ones)
+    eventSeen: '',          // the story event already looked at
+    groups: {},             // (2.1.0) group chats made on the phone: '#grp:id' -> { name, members: [names], created }
     current: ''             // the conversation currently open
 };
 
 /* SKINS. 'arc' is the original look — bubbles floating over the page, untouched.
    The other three draw a phone: same contacts, same thread, same bar, inside a case. */
 const SKINS = ['arc', 'cute', 'goth', 'lace', 'modern'];
+const PHONE_VIEWS = ['home', 'messages', 'contacts', 'chat', 'feed', 'calls', 'gallery', 'calendar', 'maps', 'mail', 'music', 'shop'];
 function isPhoneSkin() { return settings.skin && settings.skin !== 'arc'; }
 const PHONE_PAGE = 30;      // phone skins: messages drawn at once; scrolling up loads 30 more
 
@@ -183,8 +266,8 @@ let msgNodes = new Map();    // bubble key -> its element, reused across renders
 function loadSettings() {
     if (!extension_settings[MODULE_NAME]) extension_settings[MODULE_NAME] = {};
     settings = Object.assign({}, defaults, extension_settings[MODULE_NAME]);
-    for (const k of ['threads', 'active', 'state', 'unread', 'diaries', 'cast', 'looks', 'aliases']) if (!settings[k] || typeof settings[k] !== 'object') settings[k] = {};
-    for (const k of ['temperature', 'contextTokens', 'mainChatMessages', 'minGapMinutes', 'maxPerDay', 'quietFrom', 'quietTo', 'arcDepth', 'bubbleWidth', 'visibleCount', 'offsetRight', 'offsetTop', 'fade', 'diaryEntries', 'threadMemory', 'maxTokens', 'phoneSize', 'wallDim']) {
+    for (const k of ['threads', 'active', 'state', 'unread', 'diaries', 'cast', 'looks', 'aliases', 'briefs', 'groups', 'moments', 'pairs', 'met', 'blocked', 'hidden', 'unknown', 'voices', 'favs', 'birthdays', 'songs']) if (!settings[k] || typeof settings[k] !== 'object') settings[k] = {};
+    for (const k of ['temperature', 'contextTokens', 'mainChatMessages', 'minGapMinutes', 'maxPerDay', 'quietFrom', 'quietTo', 'arcDepth', 'bubbleWidth', 'visibleCount', 'offsetRight', 'offsetTop', 'fade', 'diaryEntries', 'threadMemory', 'maxTokens', 'phoneSize', 'wallDim', 'compressOver', 'feedEvery', 'feedPerDay', 'feedPosts', 'callChance', 'callsUnseen', 'unknownLast', 'mailLast', 'wallet']) {
         if (!Number.isFinite(settings[k])) settings[k] = defaults[k];
     }
     // the first build hugged the very right edge and dimmed old messages far too hard —
@@ -196,6 +279,7 @@ function loadSettings() {
     }
     if (typeof settings.prompt !== 'string' || !settings.prompt.trim()) { settings.prompt = DEFAULT_PROMPT; if (settings.promptPreset === 'custom') settings.promptPreset = 'main'; }
     if (!SKINS.includes(settings.skin)) settings.skin = 'arc';
+    if (!PHONE_VIEWS.includes(settings.phoneView)) settings.phoneView = 'home';
     // (2.0.2) a hand-edited or damaged settings file: a thread that is not a list, an empty slot
     // or a message whose text is not text no longer stops the whole phone from drawing
     for (const id of Object.keys(settings.threads)) {
@@ -207,6 +291,34 @@ function loadSettings() {
     for (const k of ['cast', 'aliases']) for (const id of Object.keys(settings[k])) if (typeof settings[k][id] !== 'string') delete settings[k][id];
     settings.phoneSize = Math.max(80, Math.min(130, settings.phoneSize));
     settings.wallDim = Math.max(0, Math.min(80, settings.wallDim));
+    settings.compressOver = Math.max(100, Math.min(4000, settings.compressOver));
+    settings.feedEvery = Math.max(5, Math.min(1440, settings.feedEvery));
+    settings.feedPerDay = Math.max(1, Math.min(48, settings.feedPerDay));
+    settings.feedPosts = Math.max(1, Math.min(3, Math.round(settings.feedPosts)));
+    feedStore();
+    settings.callChance = Math.max(0, Math.min(100, settings.callChance));
+    for (const id of Object.keys(settings.unknown)) { const u = settings.unknown[id]; if (!id.startsWith(UNKNOWN_PREFIX) || !u || typeof u !== 'object' || typeof u.from !== 'string') delete settings.unknown[id]; }
+    if (!settings.muted || typeof settings.muted !== 'object' || Array.isArray(settings.muted)) settings.muted = {};
+    for (const k of Object.keys(settings.muted)) if (['__proto__', 'constructor', 'prototype'].includes(k) || settings.muted[k] !== true) delete settings.muted[k];
+    if (!settings.invites || typeof settings.invites !== 'object' || Array.isArray(settings.invites)) settings.invites = {};
+    for (const k of Object.keys(settings.invites)) { const v = settings.invites[k]; if (['__proto__', 'constructor', 'prototype'].includes(k) || !v || typeof v !== 'object' || typeof v.what !== 'string' || !Number.isFinite(v.at)) delete settings.invites[k]; }
+    for (const u of Object.values(settings.unknown)) if (u.rumour && (typeof u.rumour !== 'object' || typeof u.rumour.text !== 'string' || !Number.isFinite(u.rumour.payAt))) delete u.rumour;
+    if (!Array.isArray(settings.calls)) settings.calls = [];
+    if (!Array.isArray(settings.reminders)) settings.reminders = [];
+    if (!Array.isArray(settings.mail)) settings.mail = [];
+    settings.wallet = Math.max(0, Math.min(WALLET_CAP, Math.round(settings.wallet)));
+    if (!settings.shop || typeof settings.shop !== 'object' || !Array.isArray(settings.shop.items)) settings.shop = { items: [], day: '' };
+    settings.mail = settings.mail.filter(x => x && typeof x.text === 'string' && typeof x.id === 'string').slice(-80);
+    settings.reminders = settings.reminders.filter(r => r && typeof r.text === 'string' && /^\d{4}-\d\d-\d\d$/.test(r.date || '')).slice(-200);
+    settings.calls = settings.calls.filter(c => c && typeof c.id === 'string' && Number.isFinite(c.ts)).slice(-100);
+    // own group chats from a hand-edited or old file: only well-formed ones are kept
+    for (const id of Object.keys(settings.groups)) {
+        const g = settings.groups[id];
+        if (!id.startsWith(OWN_GROUP_PREFIX) || UNSAFE_KEYS.has(id) || !g || typeof g !== 'object') { delete settings.groups[id]; continue; }
+        g.name = String(g.name || '').trim().slice(0, 40);
+        g.members = (Array.isArray(g.members) ? g.members : []).filter(n => typeof n === 'string' && n.trim()).map(n => n.trim().slice(0, 60)).filter((n, i, a) => a.indexOf(n) === i).slice(0, GROUP_MAX);
+        if (!g.name) g.name = g.members.join(', ').slice(0, 40) || 'Group';
+    }
     // photo generation: same shape as the Rabbit Hole's, merged so new fields get defaults
     if (!settings.images || typeof settings.images !== 'object') settings.images = { ...IMG_DEF };
     for (const k in IMG_DEF) if (settings.images[k] === undefined) settings.images[k] = IMG_DEF[k];
@@ -249,12 +361,12 @@ const L = {
         tts_novoice: 'У {name} нет голоса — назначь его в TTS (Voice Map) или задай [Default Voice].',
         set_wall: 'Обои', wall_pick: 'Выбрать картинку', wall_clear: 'Убрать', wall_dim: 'Вуаль', wall_nostore: 'Хранилище браузера недоступно — обои не сохранить.',
         set_lite: 'Без размытия под облачками (быстрее)',
-        look_title: 'Внешность для фото', look_upload: 'Своя картинка', look_clear: 'Убрать', look_ava: 'Использовать аватарку',
+        pic_full: 'Картинка {name} целиком', look_title: 'Внешность для фото', look_upload: 'Своя картинка', look_clear: 'Убрать', look_ava: 'Использовать аватарку',
         look_ph: 'Внешность: глаза, волосы — длина и цвет, телосложение, одежда…', look_scan: '👁 Распознать по картинке', look_scanning: 'Смотрю…',
         look_noref: 'Нет картинки — загрузи свою или включи аватарку.', look_err: 'Не вышло распознать: {m}. Нужна модель, которая видит картинки (например Gemini).',
         look_src_own: 'своя картинка', look_src_lens: 'из Линзы', look_src_ava: 'аватарка', look_src_none: 'без картинки — только описание',
         cast_title: 'Персонажи внутри этой карточки', cast_ph: 'Кто в карточке: имя, имя', alias_ph: 'Другие имена: прозвище, …', cast_tip: 'Имена персонажей карточки, через запятую', alias_tip: 'Как ещё модель пишет это имя: прозвища, сокращения. Для персонажа внутри карточки: Другое имя = Персонаж',
-        msg_edit: 'Изменить', msg_del: 'Удалить', msg_del_sure: 'Нажмите ещё раз, чтобы удалить', msg_save: 'Сохранить (Enter)', msg_cancel: 'Отмена (Esc)', set_preset: 'Шаблон', pr_main: 'Основной', pr_short: 'Короткие ответы', pr_custom: 'Свой',
+        msg_edit: 'Изменить', msg_del: 'Удалить', msg_del_sure: 'Нажмите ещё раз, чтобы удалить', msg_save: 'Сохранить (Enter)', msg_cancel: 'Отмена (Esc)', set_preset: 'Шаблон', pr_main: 'Основной', pr_short: 'Короткие ответы', pr_otome: 'Отоме: коротко, с эмодзи', pr_custom: 'Свой',
         set_quiet_to: 'до', set_memory: 'Память', set_test: 'Проверить связь', api_hint: 'Пусто — возьмётся ключ Tavern RPG Engine.',
         api_borrowed: 'Ключ взят из {src}', api_nokey: 'Ключа нет — впиши свой или включи Tavern RPG Engine.',
         api_wait: 'проверяю…', api_badkey: 'Ключ не подошёл.', api_http: 'Провайдер ответил {n}.', api_ok: '✓ на связи',
@@ -270,8 +382,64 @@ const L = {
         set_gap: 'Пауза, мин', set_max: 'В день, не больше',
         set_quiet: 'Тихие часы, с', set_notify: 'Уведомлять', set_sound: 'Звук', set_arc: 'Изгиб', set_width: 'Ширина', set_vis: 'Видно',
         set_fade: 'Затухание, %', regen_title: 'Перегенерировать ответ',
-        group_chat: 'Групповой чат', cancel_title: 'Отменить', cancelled: 'Отменено.',
+        group_chat: 'Групповой чат', cancel_title: 'Отменить', cancelled: 'Отменено.', cost_one: 'Один запрос к модели', cost_n: 'Запросов к модели: {n}',
+        wg_soon: 'Скоро', wg_invite: 'Приглашение', clear_of: 'Очистить переписку: {name}',
+        app_shop: 'Магазин', coin_many: 'искры', coin_balance: 'Искр: {n}', shop_tip: 'Искры — деньги Телефона: {d} в день, пока ты им пользуешься, копится до {cap}. Монеты Вендоров не тратятся.',
+        shop_empty: 'Витрина пуста — открой её кнопкой ниже.', shop_refresh: 'Открыть витрину', shop_fresh: 'Новая витрина — завтра', shop_busy: 'Раскладываю товары…',
+        shop_buy: 'Купить {name} за {n}', shop_to: 'Кому подарить', shop_cost: '{n} искр', shop_tag: 'подарок', shop_sent: 'Подарок отправлен: {name}',
+        app_mail: 'Почта', mail_fetch: 'Проверить почту', mail_off_h: 'Почта выключена', mail_off_p: 'Иногда сюда будут приходить письма из мира истории: приглашения, счета, уведомления, документы, анонимки. Не чаще раза в день; каждое письмо — один запрос к модели.',
+        mail_turn_on: 'Включить почту', mail_empty: 'Писем пока нет.', mail_nosubj: '(без темы)', mail_unread: 'Отметить непрочитанным', set_mail_on: 'Письма в «Почте» (не чаще раза в день, каждое — запрос)',
+        app_music: 'Музыка', mus_of: 'Плейлист: {name}', mus_n: 'песен: {n}', mus_none: 'пока пусто', mus_find: 'Узнать любимые песни', mus_refresh: 'Обновить плейлист', mus_finding: 'Подбираю…',
+        mus_yt: 'Найти «{t}» на YouTube', mus_share: 'Поделиться с {name}', mus_tag: 'песня',
+        app_maps: 'Карты', map_plan: 'Карта локаций', map_as_list: 'Списком', map_as_plan: 'На карте', map_zin: 'Приблизить', map_zout: 'Отдалить', map_me: 'Где я', map_here: 'Ты здесь: ', map_who: 'Где кто', map_with_you: 'рядом с тобой', map_unknown: 'неизвестно где', map_locked: 'закрыто',
+        map_empty: 'На карте пока нет мест.', map_nobody: 'Сейчас здесь никого.', map_share: 'Поделиться локацией', map_share_to: 'Кому отправить', map_shared_tag: 'место', map_sent: 'Место отправлено: {name}',
+        app_calendar: 'Календарь', cal_add: 'Новое напоминание', cal_prev: 'Предыдущий месяц', cal_next: 'Следующий месяц', cal_story: 'В истории сейчас',
+        cal_date: 'Дата', cal_time: 'Время (необязательно)', cal_text_ph: 'Что напомнить…', cal_need: 'Нужны дата и текст.', cal_soon: 'Скоро', cal_nothing: 'Ничего не запланировано. Нажми на день или «+», чтобы добавить напоминание.',
+        cal_bd_of: 'День рождения: {name}', cal_bd_today: 'Сегодня день рождения у {name}', cal_bd_btn: 'Найти дни рождения', cal_bd_busy: 'Ищу…',
+        cal_bd_done: 'Дни рождения из карточек уже найдены', cal_bd_found: 'Найдено дней рождения: {n}. Где в карточке даты нет — пусто.',
+        app_gallery: 'Галерея', hs_apps: 'Приложения', hs_pages: 'Страницы главного экрана', hs_page: 'Страница {n}',
+        gal_all: 'Все', gal_favs: 'Избранное', gal_open: 'Фото: {name}', gal_close: 'Закрыть', gal_prev: 'Предыдущее', gal_next: 'Следующее', gal_fav: 'В избранное',
+        gal_chat: 'К переписке', gal_del: 'Удалить фото', gal_empty: 'Фото пока нет — они появятся, когда персонажи пришлют снимки и их проявят, или когда ты отправишь свои.', gal_none_here: 'Здесь пока пусто.',
+        voice_who: 'Чей голос',
+        voice_h: 'Голос (Google Gemini TTS)', voice_p: 'Своим голосом персонаж говорит в голосовых и звонках Телефона. Нужен ключ Google AI Studio в подключениях таверны.', voice_none: 'Как в TTS таверны',
+        voice_try: 'Послушать', voice_manner: 'Манера', voice_m_none: 'Манера: обычная', voice_m_aristocrat: 'Манера: аристократ', voice_m_butler: 'Манера: дворецкий',
+        voice_m_cutie: 'Манера: милашка', voice_m_tsundere: 'Манера: цундере', voice_m_own: 'Манера: своя', voice_own_ph: 'Например: тихо, с хрипотцой, чуть насмешливо',
+        voice_sample: 'Привет. Это я, {name}. Так звучит мой голос.', voice_err: 'Голос не получился: {m}',
+        inv_in: 'через {n} мин', inv_go: 'сейчас — напишите или позвоните', inv_now: 'Ждёт вас: {what}', inv_kept_sys: 'вы успели: {what}', inv_missed_sys: 'приглашение пропущено: {what}', rum_true: 'Слух подтвердился — пишет {name}', rum_false: 'Слух не подтвердился — пишет {name}', rum_unclear: 'Слух пока не ясен — пишет {name}', rum_title: 'Слухи', rum_open: 'ждёт развязки', rum_v_true: 'подтвердился', rum_v_false: 'не подтвердился', rum_v_unclear: 'пока не ясно', unk_unknown: 'Неизвестный', unk_title: 'Неизвестные номера', unk_del: 'Удалить переписку', unk_kind_hint: 'намёк', unk_kind_warning: 'предупреждение', unk_kind_wrong: 'ошиблись номером', unk_kind_spam: 'спам',
+        blk_title: 'Заблокированные', blk_state: 'заблокирован(а)', blk_on: 'Заблокировать', blk_off: 'Разблокировать', blk_cant: 'Контакт заблокирован — разблокируй его в «Контактах», чтобы написать.',
+        mute_on: 'Заглушить', mute_off: 'Включить звук', mute_state: 'без звука', hid_state: 'скрытый чат', hid_on: 'Скрыть чат', hid_off: 'Показать чат', sec_title: 'Тайны', sec_p: 'Скрытый чат пропадает из «Сообщений», главного экрана и экрана блокировки — открыть его можно только отсюда. Заблокированный контакт не пишет и не звонит. Заглушённый не пишет первым, не звонит и не шумит, но в Ленте остаётся — постит и ставит реакции.',
+        set_unk: 'Тайны', set_unk_on: 'SMS с неизвестных номеров', set_unk_tip: 'Намёк на то, что происходит в истории, предупреждение, «ошиблись номером» или спам этого мира. Не чаще раза в день, не в тихие часы. Каждое — один запрос.',
+        rel_tab: 'История', rel_setup: 'Настройка', rel_met: 'знакомы с {d}', rel_msgs: 'сообщений: {n}', rel_calls: 'звонков: {n} · {d}', rel_trust: 'доверие {n}/100',
+        rel_none: 'Пока вас ничего не связывает — напиши первой.', rel_photos: 'Фото от персонажа', rel_moments: 'Важные моменты', rel_no_moments: 'Пока пусто. Подарки и события из Дневника появятся здесь сами; «Вспомнить» найдёт в переписке обещания, признания и памятные даты.',
+        rel_recall: 'Вспомнить важное', rel_recalling: 'Вспоминаю…', rel_nothing: 'В переписке не нашлось важных моментов.', rel_pairs: 'Кто им кто', rel_pairs_btn: 'Узнать, кто им кто',
+        nt_title: 'Уведомления', nt_new: 'Есть новое', nt_event: 'Новое событие',
+        app_calls: 'Телефон', call_incoming: 'Входящий звонок…', call_calling: 'Вызов…', call_answer: 'Принять', call_decline: 'Отклонить', call_end: 'Завершить',
+        call_say_ph: 'Сказать…', call_missed: 'Пропущенный', call_in: 'Входящий', call_out: 'Исходящий', call_back: 'Перезвонить: {name}', calls_empty: 'Звонков пока не было.',
+        call_call: 'Позвонить', call_busy: 'Сейчас уже идёт звонок.', call_missed_sys: 'Пропущенный звонок', call_declined_sys: 'Звонок отклонён', call_ended_sys: 'Звонок · {d}', call_unfold: 'Показать разговор ({n})', call_fold: 'Свернуть разговор',
+        set_calls: 'Звонки', set_call_chance: 'Звонят вместо сообщения (%)', set_voicemail: 'После пропущенного звонка — голосовое сообщение',
+        set_calls_tip: 'Только в обложках-телефонах. Звонок идёт по тем же правилам, что и «пишут первыми»: тихие часы и лимит в день. Голосовое — ещё один запрос.',
+        app_feed: 'Лента', feed_nobody: 'В ленте некому писать — добавь кого-нибудь в «Контакты».', feed_bad: 'Модель ответила, но не в том виде, который Лента умеет прочитать — попробуй ещё раз или другую модель.',
+        feed_note: '{name} опубликовал(а) пост:', feed_draw: 'Проявить фото', feed_drawing: 'Проявляю…', feed_like: 'Нравится', feed_comments: 'комментариев: {n}',
+        feed_comment_ph: 'Комментарий…', feed_send: 'Отправить', catchup_note: 'Пока вас не было: новых — {n}', feed_del: 'Удалить пост', feed_cdel: 'Удалить комментарий', feed_clear: 'Очистить ленту', feed_clear_sure: 'Нажмите ещё раз — удалится вся лента', feed_cleared: 'Лента очищена', feed_stories: 'Истории за день', feed_you: 'вам', feed_liked_one: 'Нравится {name}', feed_liked_more: 'Нравится {name} и ещё {n}', feed_story_new: 'новое', feed_more: 'Новые посты', feed_off_h: 'Лента выключена',
+        feed_off_p: 'Здесь персонажи с телефона сами пишут посты о своём дне и комментируют друг друга. Каждая пачка постов — один запрос к модели, твой комментарий — ещё один.',
+        feed_turn_on: 'Включить ленту', feed_empty: 'Пока пусто — первые посты появятся сами или по кнопке ↻ сверху.', feed_loading: 'Пишут…',
+        set_world: 'Мир живёт без вас', set_catchup_on: 'Сводка после перерыва', set_catchup_tip: 'Если вас не было 6+ часов: пара сообщений в чатах, пост, пропущенный звонок — с настоящим временем. Один запрос в день.', set_chatter_on: 'Группы болтают без вас', set_chatter_tip: 'Тихая 3+ часа группа сама обсуждает свои дела. До 2 раз в день, не в тихие часы, каждый раз — один запрос.',
+        set_feed: 'Лента', set_feed_on: 'Персонажи публикуют посты в «Ленте»', set_feed_tip: 'Только пока телефон открыт, не в тихие часы. Каждая пачка — один запрос.',
+        set_feed_every: 'Раз в (минут)', set_feed_day: 'Пачек в день', set_feed_posts: 'Постов в пачке',
+        pv_you: 'Ты', pv_photo: 'Фото', pv_voice: 'Голосовое', pv_file: 'Файл', pv_unread: 'новых: {n}', pv_empty: 'Пока ни слова', pv_more: 'и ещё {n}', yesterday: 'вчера',
+        wg_world: 'Погода и место в истории', wg_nobody: 'Никого на связи — открой «Контакты»', wg_event: 'Сейчас в истории', dock: 'Приложения',
+        app_messages: 'Сообщения', app_contacts: 'Контакты', app_wall: 'Обои', lk_open: 'Открыть', lk_home: 'На главный экран',
+        card_status_on: 'на телефоне', card_status_off: 'нет на телефоне', card_cast_n: 'в карточке ещё {n}', card_open: 'Карточка контакта', card_on: 'На телефоне',
+        card_back: 'Назад', card_write: 'Написать',
+        card_cast_h: 'Кто ещё живёт в этой карточке', card_cast_p: 'Если в одной карточке несколько людей (семья, команда, рассказчик и его друзья), перечисли их через запятую: каждый сможет писать от своего имени.', card_cast_ph: 'Например: Мира, Том',
+        card_alias_h: 'Другие имена', card_alias_p: 'Как ещё модель может подписать сообщения: прозвища, сокращения — чтобы они не превращались в чужого человека. Прозвище человека из карточки пишется так: прозвище = имя.', card_alias_ph: 'Например: Ал, Рыжик = Мира',
+        card_look_p: 'По этой картинке и описанию рисуются фото, которые присылает персонаж.',
+        grp_new: 'Новая группа', grp_name_ph: 'Название группы', grp_pick: 'Участники: от 2 до {n}', grp_picked: 'Выбрано: {k} из {n}',
+        grp_create: 'Создать', grp_save: 'Сохранить', grp_cancel: 'Отмена', grp_edit: 'Изменить группу', grp_del: 'Удалить',
+        grp_del_sure: 'Удалить с перепиской?', grp_deleted: 'Группа «{name}» удалена.', grp_need2: 'Выбери хотя бы двоих.', grp_groups: 'Группы', grp_people: 'Персонажи', grp_tavern: 'групповой чат таверны', grp_tavern_open: 'групповой чат таверны · открыт сейчас',
         set_diary: 'Память из RPG Diary', set_diary_n: 'Записей дневника',
+        set_compress: 'Сжимать длинные карточки (один раз, запоминается)', set_compress_over: 'Сжимать, если больше (токенов)',
+        set_briefs_reset: 'Сжать заново', set_briefs_tip: 'Забыть сжатые карточки Телефона — при следующем ответе они сожмутся снова', briefs_cleared: 'Сжатые карточки забыты — сожмутся заново при следующем ответе.',
         set_thmem: 'Из переписки',
         diary_btn: 'Дневник (RPG Diary)', diary_title: 'Дневник', diary_write: 'Написать запись',
         diary_no_ext: 'Расширение RPG Diary не найдено или выключено.',
@@ -287,7 +455,7 @@ const L = {
         clear: 'Очистить переписку', cleared: 'Переписка очищена.', clear_confirm: 'Точно стереть: {name}?',
         attach: 'Прикрепить фото или файлы', attach_limit: 'За раз — не больше 8 вложений; лишние пропущены.',
         just_now: 'только что', min_ago: '{n} мин назад', hr_ago: '{n} ч назад', day_ago: '{n} дн назад',
-        online: 'на связи', typing: 'печатает…', typing_who: '{name} печатает…', earlier: 'Раньше', minimize: 'Свернуть', contacts: 'Контакты',
+        online: 'на связи', st_near: 'там же, где вы', grp_members: 'участников: {n}', typing: 'печатает…', typing_who: '{name} печатает…', earlier: 'Раньше', minimize: 'Свернуть', contacts: 'Контакты',
         set_skin: 'Скин', skin_arc: 'Облачка', skin_cute: 'Милый', skin_goth: 'Готика', skin_lace: 'Кружево', skin_modern: 'Обычный',
         set_size: 'Размер', phone_back: 'Телефон свёрнут — нажми, чтобы открыть'
     },
@@ -317,12 +485,12 @@ const L = {
         tts_novoice: '{name} has no voice — map one in TTS (Voice Map) or set a [Default Voice].',
         set_wall: 'Wallpaper', wall_pick: 'Choose image', wall_clear: 'Remove', wall_dim: 'Veil', wall_nostore: 'Browser storage is unavailable — the wallpaper cannot be saved.',
         set_lite: 'No blur behind the bubbles (faster)',
-        look_title: 'Looks for photos', look_upload: 'Own picture', look_clear: 'Remove', look_ava: 'Use the avatar',
+        pic_full: '{name}: the whole picture', look_title: 'Looks for photos', look_upload: 'Own picture', look_clear: 'Remove', look_ava: 'Use the avatar',
         look_ph: 'Looks: eyes, hair length and colour, build, outfit…', look_scan: '👁 Read from the picture', look_scanning: 'Looking…',
         look_noref: 'No picture — upload one or enable the avatar.', look_err: 'Could not read it: {m}. This needs a model that can see images (e.g. Gemini).',
         look_src_own: 'own picture', look_src_lens: 'from Lens', look_src_ava: 'avatar', look_src_none: 'no picture — description only',
         cast_title: 'Characters inside this card', cast_ph: 'In this card: name, name', alias_ph: 'Other names: nickname, …', cast_tip: 'Names of the characters in this card, comma-separated', alias_tip: 'Other ways the model writes this name: nicknames, short names. For someone inside the card: Other name = Character',
-        msg_edit: 'Edit', msg_del: 'Delete', msg_del_sure: 'Click again to delete', msg_save: 'Save (Enter)', msg_cancel: 'Cancel (Esc)', set_preset: 'Template', pr_main: 'Main', pr_short: 'Short replies', pr_custom: 'My own',
+        msg_edit: 'Edit', msg_del: 'Delete', msg_del_sure: 'Click again to delete', msg_save: 'Save (Enter)', msg_cancel: 'Cancel (Esc)', set_preset: 'Template', pr_main: 'Main', pr_short: 'Short replies', pr_otome: 'Otome: short, with emoji', pr_custom: 'My own',
         set_quiet_to: 'to', set_memory: 'Memory', set_test: 'Test connection', api_hint: 'Empty — the Tavern RPG Engine key is used.',
         api_borrowed: 'Key borrowed from {src}', api_nokey: 'No key — enter one or enable Tavern RPG Engine.',
         api_wait: 'checking…', api_badkey: 'The key was rejected.', api_http: 'The provider answered {n}.', api_ok: '✓ connected',
@@ -338,8 +506,66 @@ const L = {
         set_gap: 'Pause, min', set_max: 'Per day, at most',
         set_quiet: 'Quiet hours, from', set_notify: 'Notify', set_sound: 'Sound', set_arc: 'Arc', set_width: 'Width', set_vis: 'Shown',
         set_fade: 'Fade, %', regen_title: 'Regenerate the reply',
-        group_chat: 'Group chat', cancel_title: 'Cancel', cancelled: 'Cancelled.',
+        group_chat: 'Group chat', cancel_title: 'Cancel', cancelled: 'Cancelled.', cost_one: 'One request to the model', cost_n: '{n} requests to the model',
+        wg_soon: 'Coming up', wg_invite: 'An invite', clear_of: 'Clear the conversation: {name}',
+        app_shop: 'Shop', coin_many: 'sparks', coin_balance: '{n} sparks', shop_tip: 'Sparks are the phone\'s money: {d} a day while you use it, up to {cap}. Vendors\' coins are never spent.',
+        shop_empty: 'The window is empty — open it with the button below.', shop_refresh: 'Open the window', shop_fresh: 'A new window tomorrow', shop_busy: 'Setting out the goods…',
+        shop_buy: 'Buy {name} for {n}', shop_to: 'Who is it for', shop_cost: '{n} sparks', shop_tag: 'gift', shop_sent: 'Gift sent: {name}',
+        app_mail: 'Mail', mail_fetch: 'Check mail', mail_off_h: 'Mail is off', mail_off_p: 'Now and then letters from the story\'s world come here: invitations, bills, notices, documents, anonymous letters. At most once a day; each letter is one request to the model.',
+        mail_turn_on: 'Turn mail on', mail_empty: 'No letters yet.', mail_nosubj: '(no subject)', mail_unread: 'Mark as unread', set_mail_on: 'Letters in Mail (at most once a day, each is a request)',
+        app_music: 'Music', mus_of: 'Playlist: {name}', mus_n: '{n} songs', mus_none: 'empty for now', mus_find: 'Find their favourite songs', mus_refresh: 'Refresh the playlist', mus_finding: 'Choosing…',
+        mus_yt: 'Look up "{t}" on YouTube', mus_share: 'Share with {name}', mus_tag: 'song',
+        app_maps: 'Maps', map_plan: 'Map of places', map_as_list: 'As a list', map_as_plan: 'On the map', map_zin: 'Zoom in', map_zout: 'Zoom out', map_me: 'Where am I', map_here: 'You are here: ', map_who: 'Who is where', map_with_you: 'with you', map_unknown: 'somewhere unknown', map_locked: 'locked',
+        map_empty: 'No places on the map yet.', map_nobody: 'Nobody here right now.', map_share: 'Share location', map_share_to: 'Send to', map_shared_tag: 'location', map_sent: 'Location sent: {name}',
+        app_calendar: 'Calendar', cal_add: 'New reminder', cal_prev: 'Previous month', cal_next: 'Next month', cal_story: 'In the story now',
+        cal_date: 'Date', cal_time: 'Time (optional)', cal_text_ph: 'Remind me to…', cal_need: 'A date and a text are needed.', cal_soon: 'Coming up', cal_nothing: 'Nothing planned. Tap a day or "+" to add a reminder.',
+        cal_bd_of: 'Birthday: {name}', cal_bd_today: 'It is {name}\'s birthday today', cal_bd_btn: 'Find birthdays', cal_bd_busy: 'Looking…',
+        cal_bd_done: 'Birthdays from the cards already found', cal_bd_found: 'Birthdays found: {n}. Where a card gives no date, it stays empty.',
+        app_gallery: 'Gallery', hs_apps: 'Apps', hs_pages: 'Home screen pages', hs_page: 'Page {n}',
+        gal_all: 'All', gal_favs: 'Favourites', gal_open: 'Photo: {name}', gal_close: 'Close', gal_prev: 'Previous', gal_next: 'Next', gal_fav: 'Favourite',
+        gal_chat: 'Go to the conversation', gal_del: 'Delete the photo', gal_empty: 'No photos yet — they come when the characters send pictures and those are developed, or when you send your own.', gal_none_here: 'Nothing here yet.',
+        voice_who: 'Whose voice',
+        voice_h: 'Voice (Google Gemini TTS)', voice_p: 'Their own voice in the phone\'s voice notes and calls. Needs a Google AI Studio key in Tavern\'s connections.', voice_none: 'As in Tavern\'s TTS',
+        voice_try: 'Listen', voice_manner: 'Manner', voice_m_none: 'Manner: plain', voice_m_aristocrat: 'Manner: aristocrat', voice_m_butler: 'Manner: butler',
+        voice_m_cutie: 'Manner: sweetheart', voice_m_tsundere: 'Manner: tsundere', voice_m_own: 'Manner: my own', voice_own_ph: 'For example: quiet, a little husky, faintly mocking',
+        voice_sample: 'Hello. It\'s me, {name}. This is how my voice sounds.', voice_err: 'The voice did not work: {m}',
+        inv_in: 'in {n} min', inv_go: 'now — write or call', inv_now: 'Waiting for you: {what}', inv_kept_sys: 'you made it: {what}', inv_missed_sys: 'invite missed: {what}',
+        rum_true: 'The rumour came true — {name} writes', rum_false: 'The rumour was false — {name} writes', rum_unclear: 'The rumour is still unclear — {name} writes', rum_title: 'Rumours', rum_open: 'waiting for an answer', rum_v_true: 'came true', rum_v_false: 'was false', rum_v_unclear: 'still unclear',
+        unk_unknown: 'Unknown', unk_title: 'Unknown numbers', unk_del: 'Delete the conversation', unk_kind_hint: 'a hint', unk_kind_warning: 'a warning', unk_kind_wrong: 'wrong number', unk_kind_spam: 'spam',
+        blk_title: 'Blocked', blk_state: 'blocked', blk_on: 'Block', blk_off: 'Unblock', blk_cant: 'This contact is blocked — unblock them in Contacts to write.',
+        mute_on: 'Mute', mute_off: 'Unmute', mute_state: 'muted', hid_state: 'hidden chat', hid_on: 'Hide the chat', hid_off: 'Show the chat', sec_title: 'Secrets', sec_p: 'A hidden chat leaves Messages, the home screen and the lock screen — it opens only from here. A blocked contact neither writes nor calls. A muted one does not write first, call or make a sound, but stays in the Feed — posting and reacting.',
+        set_unk: 'Secrets', set_unk_on: 'SMS from unknown numbers', set_unk_tip: 'A hint at what is happening in the story, a warning, a wrong number or this world\'s spam. At most once a day, never in the quiet hours. Each is one request.',
+        rel_tab: 'History', rel_setup: 'Setup', rel_met: 'met on {d}', rel_msgs: '{n} messages', rel_calls: '{n} calls · {d}', rel_trust: 'trust {n}/100',
+        rel_none: 'Nothing links you yet — write first.', rel_photos: 'Photos from them', rel_moments: 'Moments that matter', rel_no_moments: 'Nothing yet. Gifts and events from the Diary appear here on their own; "Remember" finds promises, confessions and dates in your texts.',
+        rel_recall: 'Remember what matters', rel_recalling: 'Remembering…', rel_nothing: 'No moments that matter were found in the texts.', rel_pairs: 'Who is who to them', rel_pairs_btn: 'Find out who is who',
+        nt_title: 'Notifications', nt_new: 'Something new', nt_event: 'New event',
+        app_calls: 'Phone', call_incoming: 'Incoming call…', call_calling: 'Calling…', call_answer: 'Answer', call_decline: 'Decline', call_end: 'End',
+        call_say_ph: 'Say…', call_missed: 'Missed', call_in: 'Incoming', call_out: 'Outgoing', call_back: 'Call back: {name}', calls_empty: 'No calls yet.',
+        call_call: 'Call', call_busy: 'A call is already on.', call_missed_sys: 'Missed call', call_declined_sys: 'Call declined', call_ended_sys: 'Call · {d}', call_unfold: 'Show the talk ({n})', call_fold: 'Fold the talk',
+        set_calls: 'Calls', set_call_chance: 'They call instead of texting (%)', set_voicemail: 'A missed call leaves a voice message',
+        set_calls_tip: 'Phone skins only. A call follows the same rules as texting first: quiet hours and the daily limit. A voice message is one more request.',
+        app_feed: 'Feed', feed_nobody: 'Nobody to post in the feed — add someone in Contacts.', feed_bad: 'The model answered, but not in a form the Feed can read — try again or another model.',
+        feed_note: '{name} posted:', feed_draw: 'Develop the photo', feed_drawing: 'Developing…', feed_like: 'Like', feed_comments: '{n} comments',
+        feed_comment_ph: 'Comment…', feed_send: 'Send', catchup_note: 'While you were away: {n} new', feed_del: 'Delete the post', feed_cdel: 'Delete the comment', feed_clear: 'Clear the feed', feed_clear_sure: 'Tap again — the whole feed goes', feed_cleared: 'The feed is cleared', feed_stories: 'Stories of the day', feed_you: 'you', feed_liked_one: 'Liked by {name}', feed_liked_more: 'Liked by {name} and {n} more', feed_story_new: 'new', feed_more: 'New posts', feed_off_h: 'The feed is off',
+        feed_off_p: 'Here the people on your phone post about their day and comment on each other. Each batch of posts is one request to the model; each comment of yours is one more.',
+        feed_turn_on: 'Turn the feed on', feed_empty: 'Nothing yet — the first posts come on their own, or with ↻ above.', feed_loading: 'Writing…',
+        set_world: 'The world goes on', set_catchup_on: 'Catch-up after a break', set_catchup_tip: 'Away for 6+ hours: a few texts in the chats, a post, a missed call — at real times. One request a day.', set_chatter_on: 'Groups talk without you', set_chatter_tip: 'A group quiet for 3+ hours talks about its own business. Up to twice a day, never in the quiet hours, one request each time.',
+        set_feed: 'Feed', set_feed_on: 'The characters post in the Feed', set_feed_tip: 'Only while the phone is out, never in the quiet hours. Each batch is one request.',
+        set_feed_every: 'Every (minutes)', set_feed_day: 'Batches a day', set_feed_posts: 'Posts per batch',
+        pv_you: 'You', pv_photo: 'Photo', pv_voice: 'Voice message', pv_file: 'File', pv_unread: '{n} new', pv_empty: 'Not a word yet', pv_more: 'and {n} more', yesterday: 'yesterday',
+        wg_world: 'Weather and place in the story', wg_nobody: 'Nobody on the phone — open Contacts', wg_event: 'Now in the story', dock: 'Apps',
+        app_messages: 'Messages', app_contacts: 'Contacts', app_wall: 'Wallpaper', lk_open: 'Open', lk_home: 'Home screen',
+        card_status_on: 'on the phone', card_status_off: 'not on the phone', card_cast_n: '{n} more in the card', card_open: 'Contact card', card_on: 'On the phone',
+        card_back: 'Back', card_write: 'Message',
+        card_cast_h: 'Who else lives in this card', card_cast_p: 'If one card holds several people (a family, a crew, a narrator and friends), list them with commas: each can text under their own name.', card_cast_ph: 'For example: Mira, Tom',
+        card_alias_h: 'Other names', card_alias_p: 'Other ways the model may sign their messages — nicknames, short names — so they do not turn into a stranger. A nickname of someone in the card is written as: nickname = name.', card_alias_ph: 'For example: Al, Ginger = Mira',
+        card_look_p: 'Photos this character sends are drawn from this picture and description.',
+        grp_new: 'New group', grp_name_ph: 'Group name', grp_pick: 'Members: 2 to {n}', grp_picked: 'Chosen: {k} of {n}',
+        grp_create: 'Create', grp_save: 'Save', grp_cancel: 'Cancel', grp_edit: 'Edit group', grp_del: 'Delete',
+        grp_del_sure: 'Delete with the messages?', grp_deleted: 'Group "{name}" deleted.', grp_need2: 'Pick at least two.', grp_groups: 'Groups', grp_people: 'Characters', grp_tavern: 'a Tavern group chat', grp_tavern_open: 'a Tavern group chat · open now',
         set_diary: 'Memory from RPG Diary', set_diary_n: 'Diary entries',
+        set_compress: 'Condense long character cards (once, kept)', set_compress_over: 'Condense above (tokens)',
+        set_briefs_reset: 'Condense again', set_briefs_tip: 'Forget the Phone\'s condensed cards — they are condensed again with the next reply', briefs_cleared: 'Condensed cards forgotten — they are condensed again with the next reply.',
         set_thmem: 'From this thread',
         diary_btn: 'Diary (RPG Diary)', diary_title: 'Diary', diary_write: 'Write an entry',
         diary_no_ext: 'The RPG Diary extension is not installed or is disabled.',
@@ -355,7 +581,7 @@ const L = {
         clear: 'Clear thread', cleared: 'Thread cleared.', clear_confirm: 'Really erase: {name}?',
         attach: 'Attach photos or files', attach_limit: 'Up to 8 attachments at once; the rest were skipped.',
         just_now: 'just now', min_ago: '{n} min ago', hr_ago: '{n} h ago', day_ago: '{n} d ago',
-        online: 'online', typing: 'typing…', typing_who: '{name} is typing…', earlier: 'Earlier', minimize: 'Minimize', contacts: 'Contacts',
+        online: 'online', st_near: 'where you are', grp_members: '{n} members', typing: 'typing…', typing_who: '{name} is typing…', earlier: 'Earlier', minimize: 'Minimize', contacts: 'Contacts',
         set_skin: 'Skin', skin_arc: 'Bubbles', skin_cute: 'Cute', skin_goth: 'Gothic', skin_lace: 'Lace', skin_modern: 'Classic',
         set_size: 'Size', phone_back: 'The phone is tucked away — click to open'
     }
@@ -402,7 +628,15 @@ function stripNamePrefix(text, names) {
     if (!list.length) return s;
     if (/^\s*\[/.test(s) && !/^\s*\[[^\]]*\]\s*[:：]/.test(s)) return s;   // "[Alex: печатает…]" is a remark
     const m = RE_NAME_HEAD.exec(s);
-    return m && list.includes(m[1].trim().toLowerCase()) ? s.slice(m[0].length) : s;
+    if (!m) return s;
+    const head = m[1].trim().toLowerCase();
+    // (2.1.1) "Ava, Bram: …" — a group line headed by several names, the sender's among them
+    if (list.includes(head) || (splitNames(head).length > 1 && splitNames(head).some(x => list.includes(x)))) return s.slice(m[0].length);
+    return s;
+}
+// "Ava, Bram", "Ava & Bram", "Ава и Брэм" → ['ava','bram'] (lower case); one name → [name]
+function splitNames(head) {
+    return String(head || '').toLowerCase().split(/\s*(?:,|&|\+|\/|\s(?:и|and)\s)\s*/u).map(x => x.trim()).filter(Boolean);
 }
 // "Name:", "**Name:**", "**Name**:", "*Name:*", "__Name__:", "[Name]:", "Name：" — a name of
 // up to 40 characters at the very start of a line, its colon, and whatever wraps them
@@ -529,6 +763,21 @@ function castOfContact(id) {
     return out;
 }
 
+/* BUG FIX (2.1.5): what a voice note says. The prompts write it two ways: «[voice message: "words"]»
+   (words in quotes inside the tag) and «[voice message: a quiet laugh] words» (the tone in the
+   tag, words after it). Only the part after the tag was spoken and shown in quotes — a note with
+   its words in the tag was read as nothing, or the voice read whatever followed. Now: quoted
+   words in the tag are the words (anything after them is the tone); otherwise the tag is the
+   tone and the words follow it. */
+const RE_QUOTED = /^\s*["«“„]([\s\S]+?)["»”"]\s*$/;
+function voiceParts(kind) {
+    if (!kind) return { words: '', tone: '' };
+    const cap = String(kind.caption || '').trim(), rest = String(kind.text || '').trim();
+    const q = RE_QUOTED.exec(cap);
+    if (q) return { words: q[1].trim(), tone: rest };
+    return { words: rest, tone: cap };
+}
+function voiceWords(kind) { return voiceParts(kind).words; }
 // classify a line into a bubble kind; media keeps its caption AND any spoken text
 function classify(text) {
     let s = String(text || '').trim();
@@ -588,6 +837,7 @@ function chime() {
     beep(880, t0, 0.12); beep(1320, t0 + 0.11, 0.16);
 }
 function notify(name, text, contactId) {
+    if (contactId && (settings.hidden[contactId] || settings.blocked[contactId] || settings.muted[contactId])) return;   // (2.1.5) muted: no sound, no pop-up   // (2.1.0) a hidden chat keeps its secret
     chime();
     if (!settings.notify || document.hasFocus()) return;
     try {
@@ -610,6 +860,7 @@ function threadOf(name) {
 }
 function pushRaw(id, msg) {
     registerDiarySources();          // a brand-new thread must be known to the diary too
+    if (!settings.met[id] && !isGroup(id)) settings.met[id] = msg.ts || Date.now();   // (2.1.0) the history's first line
     const th = threadOf(id);
     // several bubbles of one reply used to share the same millisecond; a unique time
     // per message is what regenerate and the photo queue use to find it again
@@ -621,7 +872,7 @@ function pushRaw(id, msg) {
     if (msg.who === 'char') {
         const kind = classify(msg.text);
         if (kind.type === 'image' && imgCfg().enabled && imgCfg().auto) setTimeout(() => queuePhoto(id, msg, false), 0);
-        if (kind.type === 'voice' && settings.tts && settings.ttsAuto && kind.text) setTimeout(() => speakVoice(msg.name, stripNamePrefix(kind.text, msg.name), id), 0);
+        if (kind.type === 'voice' && settings.tts && settings.ttsAuto && voiceWords(kind)) setTimeout(() => speakVoice(msg.name, stripNamePrefix(voiceWords(kind), msg.name), id), 0);
     }
 }
 function pushMsg(name, who, text, from) {
@@ -693,7 +944,7 @@ async function writeDiaryEntry() {
     const rq = beginRequest(cur); renderDiaryPanel();
     try {
         const sys = `You ARE "${author}". Write a SHORT private diary entry (about 60-120 words) about your recent text conversation with "${name1 || 'them'}" — what was said, what you felt, what you did not say out loud. First person, intimate, in character. No greetings, no headers, no quotes around it. Write in ${genLang()}.
-${cardOf(author)}`;
+${await cardOf(author)}`;
         const usr = [
             timeContext(0),
             diaryBlock([author], cur),
@@ -817,7 +1068,54 @@ function renderDiaryPanel() {
    whole party of the open group chat texts together.
    ============================================================ */
 const GROUP_PREFIX = '#group:';
-function isGroup(id) { return String(id || '').startsWith(GROUP_PREFIX); }
+/* OWN GROUP CHATS (2.1.0). A group used to exist only while a Tavern group chat was open — one group,
+   and only from there. Now any characters can be gathered into a group right on the phone: it has its
+   own name, members, thread and initiative, and can be renamed, changed and deleted. Tavern's open group
+   still shows up as before. */
+function isOwnGroup(id) { return String(id || '').startsWith(OWN_GROUP_PREFIX); }
+function isGroup(id) { const s = String(id || ''); return s.startsWith(GROUP_PREFIX) || s.startsWith(OWN_GROUP_PREFIX); }
+function ownGroup(id) { const g = isOwnGroup(id) && Object.prototype.hasOwnProperty.call(settings.groups, id) ? settings.groups[id] : null; return g && typeof g === 'object' ? g : null; }
+function cleanGroupName(x) { return String(x || '').replace(/\s+/g, ' ').trim().slice(0, 40); }
+function cleanGroupMembers(list) {
+    return (Array.isArray(list) ? list : []).map(n => String(n || '').trim().slice(0, 60)).filter(Boolean).filter((n, i, a) => a.indexOf(n) === i).slice(0, GROUP_MAX);
+}
+function createGroup(name, members) {
+    const m = cleanGroupMembers(members);
+    if (m.length < 2) return null;
+    let id;
+    do id = OWN_GROUP_PREFIX + Date.now().toString(36) + Math.random().toString(36).slice(2, 6); while (settings.groups[id]);
+    settings.groups[id] = { name: cleanGroupName(name) || m.join(', ').slice(0, 40), members: m, created: Date.now() };
+    settings.active[id] = true;
+    saveSettings();
+    return id;
+}
+function updateGroup(id, name, members) {
+    const g = ownGroup(id);
+    if (!g) return false;
+    const m = cleanGroupMembers(members);
+    if (m.length < 2) return false;
+    g.name = cleanGroupName(name) || m.join(', ').slice(0, 40);
+    g.members = m;
+    saveSettings();
+    return true;
+}
+// everything of the group goes: its thread (and the photos in it), state, unread mark, the phone's diary
+function deleteGroup(id) {
+    if (!ownGroup(id)) return false;
+    forgetMessages(settings.threads[id]);
+    for (const k of ['threads', 'state', 'unread', 'active', 'diaries']) delete settings[k][id];
+    delete settings.groups[id];
+    if (settings.current === id) settings.current = '';
+    saveSettings();
+    return true;
+}
+// who can be put into a group: every card, then the people living inside a card's cast list
+function groupCandidates() {
+    const out = [];
+    characters.forEach(c => { if (c?.name && !out.includes(c.name)) out.push(c.name); });
+    Object.keys(settings.cast || {}).filter(card => characters.some(c => c && c.name === card)).forEach(card => castList(card).forEach(n => { if (n && !out.includes(n)) out.push(n); }));
+    return out.slice(0, 120);
+}
 function groupContactId() {
     try {
         const ctx = getContext();
@@ -829,6 +1127,7 @@ function groupContactId() {
 function groupMemberNames(id) {
     try {
         const ctx = getContext();
+        if (isOwnGroup(id)) return (ownGroup(id)?.members || []).slice(0, GROUP_MAX);
         const wanted = String(id).slice(GROUP_PREFIX.length);
         // BUG FIX (1.9.0): no fallback to "whatever group is open" — a renamed or
         // deleted group used to text as the members of a DIFFERENT group.
@@ -841,8 +1140,21 @@ function groupMemberNames(id) {
         return out.slice(0, 6);
     } catch (e) { return []; }
 }
-function contactLabel(id) { return isGroup(id) ? String(id).slice(GROUP_PREFIX.length) : id; }
-function contactMembers(id) { return isGroup(id) ? groupMemberNames(id) : [id]; }
+function isUnknown(id) { return String(id || '').startsWith(UNKNOWN_PREFIX); }
+function contactLabel(id) {
+    if (isUnknown(id)) return settings.unknown[id]?.from || t('unk_unknown');
+    if (isOwnGroup(id)) return ownGroup(id)?.name || t('group_chat');
+    return isGroup(id) ? String(id).slice(GROUP_PREFIX.length) : id;
+}
+// a group's picture: its first members' faces, overlapping (the old blue icon when nobody is known)
+function groupAvaHtml(id) {
+    const m = groupMemberNames(id).slice(0, 3);
+    if (!m.length) return `<span class="rph-ava rph-ava-npc rph-ava-grp"><i class="fa-solid fa-users"></i></span>`;
+    return `<span class="rph-ava-stack n${m.length}">${m.map(avatarHtml).join('')}</span>`;
+}
+function contactMembers(id) { return isGroup(id) ? groupMemberNames(id) : isUnknown(id) ? [contactLabel(id)] : [id]; }
+// (2.1.0) what the lists show: no hidden chats, no blocked people
+function shownInLists(id) { return !settings.hidden[id] && !settings.blocked[id]; }
 function contactList() {
     const list = activeNames();
     const gid = groupContactId();
@@ -869,6 +1181,7 @@ function currentContact() {
 }
 function openContact(id) {
     lastSig = '';
+    settings.phoneView = 'chat';
     phoneWindow = PHONE_PAGE;
     settings.current = id;
     if ($('#rph-diary-panel').hasClass('visible')) setTimeout(renderDiaryPanel, 0);
@@ -967,7 +1280,7 @@ function clip(x, n) { return String(x || '').replace(/\s+/g, ' ').trim().slice(0
 // BUG FIX (1.9.0). The phone-conversation memory below used currentContact() — the
 // thread OPEN on screen. A background initiative for another contact then got the
 // open conversation's diary. The conversation is now passed in explicitly.
-function diaryBlock(names, contactId) {
+function diaryBlock(names, contactId, sharedOnly) {   // sharedOnly (2.1.0): the feed is public — no private phone diary
     if (!settings.useDiary) return '';
     const parts = [];
     const seenStates = new Set();
@@ -992,7 +1305,7 @@ function diaryBlock(names, contactId) {
         if (bits.length) parts.push(`— ${n}:\n${bits.join('\n')}`);
     }
     // the diary of THIS conversation (its own diary chat in RPG Diary)
-    const cur = contactId || currentContact();
+    const cur = sharedOnly ? null : (contactId || currentContact());
     if (cur) {
         const own = [];
         const st = phoneDiaryState(cur);
@@ -1041,20 +1354,97 @@ function mainChatContext(names, count) {
 }
 // rough and deliberately pessimistic: ~3 characters per token (Cyrillic is denser)
 function estTokens(x) { return Math.ceil(String(x || '').length / 3); }
-function cardOf(name) {
+/* LONG CARDS (2.1.0). A card used to be cut off at 1200 characters — whatever stood after that (often
+   the relationships, the looks, how they talk) never reached the phone. Now a long card is condensed
+   once, with the same instructions RPG Map and Living Scene use, and the brief is kept until the card's
+   text changes. A brief Living Scene or RPG Map already made of exactly this text is used as it is
+   (read, never written), so a card is not condensed twice. Condensing off: the old cut, as before. */
+const BRIEF_PROMPT = `Condense the character description below into a compact brief for a writer who will show this character in short, everyday scenes.
+Keep only what the text states — never add, guess or embellish. Keep every name exactly as written.
+Include, where the text gives them: who they are and what they do; their appearance; family and the people close to them, and their relationships with everyone the text mentions (names, and how they feel about each other); their present situation, goals and worries; habits, routine and interests; how they talk.
+Aim for about 250 words, but never drop a relationship or the appearance to make it shorter.
+Plain text, short lines, no headings. Write it in the same language as the description.
+Output strictly JSON: {"brief":"..."}`;
+function textHash(x) {
+    let h = 2166136261 >>> 0;
+    const v = String(x || '');
+    for (let i = 0; i < v.length; i++) { h ^= v.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; }
+    return h.toString(36) + ':' + v.length;
+}
+const cardNorm = d => String(d || '').replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
+// the brief out of a model's answer: {"brief":"…"} (fenced or not), or plain text when it ignored the JSON
+function readBrief(raw) {
+    let s = String(raw || '').trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
+    try { const o = JSON.parse(s); const v = o && (o.brief || o.text || o.summary); if (typeof v === 'string') return v.trim(); } catch (e) { /* not clean JSON */ }
+    const m = s.match(/"brief"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+    if (m) { try { return JSON.parse('"' + m[1] + '"').trim(); } catch (e) { return m[1].replace(/\\n/g, '\n').trim(); } }
+    if (/^[{\[]/.test(s)) return '';
+    return s.length > 40 ? s : '';
+}
+// a brief someone else already made of exactly this text
+function borrowedBrief(ch, text) {
+    if (!ch.avatar) return '';
+    try {
+        const ls = extension_settings.rpg_living_scene?.briefs?.[`card:${ch.avatar}`];
+        if (ls && typeof ls.text === 'string' && ls.text.trim() && ls.stamp === textHash(text)) return ls.text.trim();
+        const mb = extension_settings.rpg_map_engine?.overhear?.briefs?.[`card:${ch.avatar}`];
+        if (mb && typeof mb.text === 'string' && mb.text.trim() && mb.stamp === textHash(text) + ':v2') return mb.text.trim();
+    } catch (e) { /* not there */ }
+    return '';
+}
+const briefBusy = new Map();
+async function cardBrief(ch, text) {
+    const key = `card:${ch.avatar || ch.name}`;
+    const own = settings.briefs[key];
+    if (own && own.stamp === textHash(text) && own.text) return own.text;
+    const other = borrowedBrief(ch, text);
+    if (other) return other;
+    if (briefBusy.has(key)) return briefBusy.get(key);
+    const job = (async () => {
+        try {
+            const v = readBrief(await callAI(BRIEF_PROMPT, `CHARACTER: ${ch.name}\n\n${text}`, { maxTokens: 2000 }));
+            if (!v) { console.warn('[Phone] brief: no text in the answer'); return ''; }
+            settings.briefs[key] = { text: v, stamp: textHash(text), name: ch.name, date: new Date().toISOString() };
+            const keys = Object.keys(settings.briefs);   // the 80 most recent cards are kept; the rest are made again when needed
+            if (keys.length > 80) keys.sort((a, b) => String(settings.briefs[a].date || '').localeCompare(String(settings.briefs[b].date || ''))).slice(0, keys.length - 80).forEach(k => delete settings.briefs[k]);
+            saveSettings();
+            return v;
+        } catch (e) {
+            if (e && (e.name === 'AbortError' || e.name === 'TimeoutError')) throw e;   // ✕ pressed or no answer: the reply stops too
+            console.warn('[Phone] brief failed', e); return '';
+        }
+        finally { briefBusy.delete(key); }
+    })();
+    briefBusy.set(key, job);
+    return job;
+}
+async function cardOf(name) {
     const ch = characters.find(c => c.name === name);
+    const unk = !ch && Object.values(settings.unknown || {}).find(u => u && (u.from || t('unk_unknown')) === name);
+    if (unk) return `${name}: the sender of a message from an unknown number (${unk.kind || 'unknown'}).`;
     if (!ch) {
         const dp = diaryPersonaOf(name);   // no card, but the Diary knows them
         return dp ? `${name}: ${dp}` : `${name}: a character of this story.`;
     }
-    const parts = [ch.description, ch.personality, ch.scenario].filter(Boolean).join('\n').replace(/\s+/g, ' ');
-    return `${name}: ${parts.slice(0, 1200)}`;
+    if (settings.compress === false) {
+        const parts = [ch.description, ch.personality, ch.scenario].filter(Boolean).join('\n').replace(/\s+/g, ' ');
+        return `${name}: ${parts.slice(0, 1200)}`;
+    }
+    // description + personality are condensed the way Living Scene does it (so its brief can be shared);
+    // the scenario follows, condensed on its own when it is long too
+    const main = cardNorm([ch.description, ch.personality].filter(Boolean).join('\n'));
+    const scen = cardNorm(ch.scenario);
+    const over = settings.compressOver || 400;
+    let a = main, b = scen;
+    if (estTokens(main) > over) a = (await cardBrief(ch, main)) || main;   // condensing failed: the whole card, not a cut-off half
+    if (scen && estTokens(scen) > over) b = (await cardBrief({ name: ch.name, avatar: ch.avatar ? ch.avatar + '#scenario' : '' }, scen)) || scen;
+    return `${name}: ${[a, b].filter(Boolean).join('\n').replace(/\s+/g, ' ')}`;
 }
 function threadContext(name, limit = Math.max(2, settings.threadMemory || 24)) {
     const th = threadOf(name).slice(-limit);
     if (!th.length) return '';
     const you = name1 || 'You';
-    return th.map(m => `${m.who === 'user' ? you : m.name}: ${m.text}`).join('\n');
+    return th.map(m => `${m.who === 'user' ? you : m.name}${m.call ? ' (on the phone call)' : ''}: ${m.text}`).join('\n');
 }
 
 /* ============================================================
@@ -1072,11 +1462,13 @@ const REQUEST_TIMEOUT_MS = 90000;
 // third request could start on top). Every request now carries a number; only the
 // one that owns `busy` may release it, and a cancelled one never writes its answer.
 let reqSeq = 0;
-function beginRequest(contactId) { busy = true; busyFor = contactId || null; return ++reqSeq; }
+let typingName = '';            // (2.1.0) who is "typing" between the messages of a group reply
+function beginRequest(contactId) { busy = true; busyFor = contactId || null; typingName = ''; return ++reqSeq; }
 function isCurrent(rq) { return rq === reqSeq; }
 function finishRequest(rq) {
     if (rq !== undefined && rq !== reqSeq) return;
     busy = false;
+    typingName = '';
     busyFor = null;
     currentAbort = null;
     if (watchdog) { clearTimeout(watchdog); watchdog = null; }
@@ -1096,6 +1488,33 @@ function requestFailed(e, rq, tag) {
     if (e && e.name === 'TimeoutError') toastr.warning(t('timeout'));
     else if (e && e.name === 'AbortError') toastr.info(t('cancelled'));
     else { console.error('[Phone] ' + tag + ' error', e); toastr.warning(t('err')); }
+}
+
+/* GROUP REPLIES ONE BY ONE (2.1.0). A group's answer used to drop in all at once, like a block.
+   Now the first message comes at once and the rest follow one after another, each after a short
+   "<name> is typing…" that fits its length — the way a real group chat fills up. One-to-one
+   threads are untouched. ✕ during the pause: nothing is lost, the rest arrives at once. */
+const wait = ms => new Promise(r => setTimeout(r, ms));
+async function deliverReply(cur, msgs, rq) {
+    if (!isGroup(cur) || msgs.length < 2) { msgs.forEach(m => pushMsg(cur, 'char', m.text, m.name)); return; }
+    for (let i = 0; i < msgs.length; i++) {
+        const m = msgs[i];
+        if (i > 0 && isCurrent(rq)) {
+            typingName = m.name || '';
+            renderBubbles();
+            // (2.1.1) a person adding a second line is quick; someone new joining takes a moment
+            // to read and type — the pause follows who speaks and how much, not one fixed beat
+            const same = msgs[i - 1] && msgs[i - 1].name === m.name;
+            const len = String(m.text || '').length;
+            const pause = same ? 450 + len * 14 + Math.random() * 500 : 1100 + len * 22 + Math.random() * 1400;
+            const until = Date.now() + Math.max(500, Math.min(same ? 2200 : 4200, pause));
+            while (Date.now() < until && isCurrent(rq)) await wait(80);   // ✕ ends the pause at once
+        }
+        pushMsg(cur, 'char', m.text, m.name);
+        if (isCurrent(rq)) scrollOffset = 0;
+        renderBubbles();
+    }
+    if (isCurrent(rq)) typingName = '';
 }
 
 /* ------------------------------------------------------------
@@ -1207,7 +1626,14 @@ async function imageUrl(key) {
     let url = '';
     if (v instanceof Blob) url = URL.createObjectURL(v);
     else if (typeof v === 'string' && (/^data:image\//i.test(v) || /^https?:\/\//i.test(v))) url = v;
-    if (url) imgUrlCache.set(key, url);
+    if (url) {
+        imgUrlCache.set(key, url);
+        // (2.1.0) a long gallery session no longer keeps every picture alive: the oldest not on screen are let go
+        if (imgUrlCache.size > 120) for (const [k, u] of imgUrlCache) {
+            if (imgUrlCache.size <= 90) break;
+            if (u.startsWith('blob:') && !document.querySelector(`img[src="${CSS.escape(u)}"]`)) { URL.revokeObjectURL(u); imgUrlCache.delete(k); }
+        }
+    }
     return url;
 }
 function dropImages(keys) {
@@ -1702,6 +2128,40 @@ function lookEdit(name) {
     return settings.looks[name];
 }
 function cardChar(name) { return characters.find(c => c && c.name === name) || null; }
+// (2.1.3) "Bram Holt Jr." for a card called "Bram Holt", "Mira" for "Mira Vell": the model
+// writes a fuller or shorter name than the card's. Only one card may fit, or none is taken.
+function fuzzyName(cand, list) {
+    const k = String(cand || '').trim().toLowerCase().replace(/\s+/g, ' ');
+    if (!k) return null;
+    const hits = [];
+    for (const n of list || []) {
+        const nl = String(n || '').trim().toLowerCase().replace(/\s+/g, ' ');
+        if (!nl) continue;
+        if (nl === k) return n;
+        const a = k.split(' ')[0], b = nl.split(' ')[0];
+        if (k.startsWith(nl + ' ') || nl.startsWith(k + ' ') || (a.length >= 3 && a === b)) hits.push(n);
+    }
+    return hits.length === 1 ? hits[0] : null;
+}
+// the card for a name as it was written in a message — exact, then «Ещё зовут», then a fuller/shorter form
+const cardForMemo = new Map();
+function cardFor(name) {
+    const key = characters.length + '|' + name;
+    if (cardForMemo.has(key)) return cardForMemo.get(key);
+    if (cardForMemo.size > 300) cardForMemo.clear();
+    const c = cardForRaw(name); cardForMemo.set(key, c); return c;
+}
+function cardForRaw(name) {
+    const exact = characters.find(c => c && c.name === name);
+    if (exact) return exact;
+    const n = String(name || '').trim();
+    if (!n) return null;
+    const ci = characters.filter(c => c && String(c.name).toLowerCase() === n.toLowerCase());
+    if (ci.length === 1) return ci[0];
+    const via = byAlias(n, phonePeople()); if (via) { const c = characters.find(x => x && x.name === via); if (c) return c; }
+    const f = fuzzyName(n, phonePeople()) || fuzzyName(n, characters.map(c => c && c.name));
+    return f ? characters.find(c => c && c.name === f) || null : null;
+}
 function lensProfile(name) {
     try {
         const ch = cardChar(name);
@@ -1967,9 +2427,91 @@ function ttsVoiceFor(name, contactId) {
 }
 let ttsWarned = false;
 const ttsNoVoiceWarned = new Set();
-async function speakVoice(name, text, contactId) {
+/* A VOICE OF THEIR OWN (2.1.0). A person can be given a Google Gemini TTS voice right in their
+   contact card — also someone living inside a card, whom Tavern's own voice list never shows — and a
+   manner («softly, unhurried…»). It goes through Tavern's own Gemini TTS endpoint and its Google AI
+   Studio key; the manner is put before the words the way Gemini TTS takes it ("Say …: words").
+   Nobody pinned: Tavern's TTS speaks as before. */
+const GEMINI_VOICES = ['Zephyr', 'Puck', 'Charon', 'Kore', 'Fenrir', 'Leda', 'Orus', 'Aoede', 'Callirhoe', 'Autonoe', 'Enceladus', 'Iapetus', 'Umbriel', 'Algieba', 'Despina', 'Erinome', 'Algenib', 'Rasalgethi', 'Laomedeia', 'Achernar', 'Alnilam', 'Schedar', 'Gacrux', 'Pulcherrima', 'Achird', 'Zubenelgenubi', 'Vindemiatrix', 'Sadachbia', 'Sadaltager', 'Sulafat'];
+const VOICE_MANNERS = {
+    aristocrat: 'in a soft, unhurried, velvety baritone, perfectly polite and composed, with a quiet hint of danger under the courtesy',
+    butler: 'in a smooth, silky low voice, impeccably polite and precise, faintly amused and teasing',
+    cutie: 'in a bright, sweet, slightly breathy voice, quick and cheerful, smiling as you speak',
+    tsundere: 'in a sharp, huffy, fast voice, flustered and defensive, softening a little at the end',
+};
+function voicePin(name) { const v = settings.voices[name]; return v && typeof v === 'object' && GEMINI_VOICES.includes(v.voice) ? v : null; }
+function mannerText(v) { if (!v || !v.manner) return ''; return VOICE_MANNERS[v.manner] || String(v.manner).replace(/[\r\n]+/g, ' ').slice(0, 200); }
+let voiceAudio = null;
+async function geminiSpeak(v, words, gen) {
+    const m = mannerText(v);
+    const text = m ? `Say ${m}: ${words}` : words;
+    const tts = extension_settings.tts || {};
+    const model = tts['Google Gemini TTS']?.model || 'gemini-2.5-flash-preview-tts';
+    const headers = (getContext().getRequestHeaders || (() => ({ 'Content-Type': 'application/json' })))();
+    // (2.1.5) a request that never answers no longer hangs the voice for good
+    const ctrl = new AbortController(); const tm = setTimeout(() => ctrl.abort(), 45000);
+    let res;
+    try { res = await fetch('/api/google/generate-native-tts', { method: 'POST', headers, signal: ctrl.signal, body: JSON.stringify({ text, voice: v.voice, model, api: 'makersuite' }) }); }
+    finally { clearTimeout(tm); }
+    if (!res.ok) { let msg = 'HTTP ' + res.status; try { msg = (await res.json()).error || msg; } catch (e) { } throw new Error(msg); }
+    const blob = await res.blob();
+    if (gen !== undefined && gen !== voiceGen) return false;     // stopped while it was being made
+    const url = URL.createObjectURL(blob);
+    const a = voiceAudio = new Audio(url);
+    // ends, fails, is stopped — or, at the latest, a little after its own length (a stalled stream)
+    await new Promise(done => {
+        let cap = setTimeout(done, 120000);
+        a.onloadedmetadata = () => { if (Number.isFinite(a.duration) && a.duration > 0) { clearTimeout(cap); cap = setTimeout(done, (a.duration + 4) * 1000); } };
+        a.onended = a.onerror = a.onpause = () => { clearTimeout(cap); done(); };
+        a.play().catch(() => { clearTimeout(cap); done(); });
+    });
+    if (voiceAudio === a) voiceAudio = null;
+    URL.revokeObjectURL(url);
+    return true;
+}
+/* BUG FIX (2.1.5): voices jumped from line to line, read only the end, or stopped short. Each new
+   voice note cut the one playing, and they started while Tavern was still writing (its own TTS
+   resets its player when a new message begins). Now they wait in one line: one at a time, after
+   Tavern has finished writing and its own voice is quiet. A press on a bubble goes first. */
+const voiceQueue = [];
+let voiceNowTs = 0;       // the note the player pressed, while it plays
+let voiceRunning = false, voiceGen = 0;
+const tavernBusy = () => { try { const st = document.getElementById('mes_stop'); const au = document.getElementById('tts_audio'); return (st && getComputedStyle(st).display !== 'none') || (au && !au.paused && !au.ended && au.currentSrc && !/silence\.mp3/.test(au.currentSrc)); } catch (e) { return false; } };
+async function waitTavernQuiet(gen) {
+    const until = Date.now() + 120000;
+    while (tavernBusy() && Date.now() < until && gen === voiceGen) await new Promise(r => setTimeout(r, 400));
+}
+function stopVoices() { voiceGen++; voiceQueue.splice(0).forEach(j => j.done(false)); try { voiceAudio?.pause(); } catch (e) { } }
+function speakVoice(name, text, contactId, now) {
+    return new Promise(done => {
+        if (now) stopVoices();
+        voiceQueue.push({ name, text, contactId, done });
+        runVoices();
+    });
+}
+async function runVoices() {
+    if (voiceRunning) return;
+    voiceRunning = true;
+    try {
+        while (voiceQueue.length) {
+            const gen = voiceGen;
+            const j = voiceQueue.shift();
+            await waitTavernQuiet(gen);
+            if (gen !== voiceGen) { j.done(false); continue; }
+            let ok = false;
+            try { ok = await speakVoiceNow(j.name, j.text, j.contactId, gen); } catch (e) { ok = false; }
+            j.done(ok);
+        }
+    } finally { voiceRunning = false; }
+}
+async function speakVoiceNow(name, text, contactId, gen) {
     const words = String(text || '').trim();
     if (!words) return false;
+    const pin = voicePin(name);
+    if (pin) {
+        try { return await geminiSpeak(pin, words, gen); }
+        catch (e) { console.warn('[Phone] Gemini voice failed', e); toastr.warning(t('voice_err', { m: String(e.message || e).slice(0, 160) })); return false; }
+    }
     const cmd = ttsCommand();
     if (!cmd) {
         if (!ttsWarned) { ttsWarned = true; toastr.info(t('tts_none')); }
@@ -1984,12 +2526,23 @@ async function speakVoice(name, text, contactId) {
             return false;
         }
     }
-    try { await cmd.callback({ voice }, words); return true; }
+    try {
+        await cmd.callback({ voice }, words);
+        // Tavern queues it and returns at once: wait until its player has started and finished,
+        // so the next note does not land on top of this one
+        const au = document.getElementById('tts_audio');
+        if (au) {
+            const start = Date.now(), cap = Math.min(90000, 4000 + words.length * 90);
+            while (Date.now() - start < 2500 && au.paused && gen === voiceGen) await new Promise(r => setTimeout(r, 150));
+            while (Date.now() - start < cap && !au.paused && !au.ended && gen === voiceGen) await new Promise(r => setTimeout(r, 250));
+        }
+        return true;
+    }
     catch (e) { console.warn('[Phone] TTS failed', e); return false; }
 }
 
 let lastFinish = '';
-async function callAI(system, user) {
+async function callAI(system, user, opts = {}) {
     if (!apiKey()) throw new Error('no api key');
     const url = apiUrl() + '/chat/completions';
     const ctrl = new AbortController();
@@ -2011,8 +2564,8 @@ async function callAI(system, user) {
                 temperature: settings.temperature,
                 // some providers ignore max_tokens and honour max_completion_tokens instead;
                 // sending both keeps OpenAI-compatible back-ends happy
-                max_tokens: Math.max(120, settings.maxTokens || 900),
-                max_completion_tokens: Math.max(120, settings.maxTokens || 900)
+                max_tokens: Math.max(120, opts.maxTokens || settings.maxTokens || 900),
+                max_completion_tokens: Math.max(120, opts.maxTokens || settings.maxTokens || 900)
             })
         });
         if (!res.ok) throw new Error('HTTP ' + res.status);
@@ -2092,7 +2645,7 @@ function parseReply(raw, allowed, extra = []) {
             const rest = s.slice(m[0].length).replace(/^(?:\*\*|__|\*|_)\s*(?=\S)/, '').trim();
             const via = byAlias(cand, allowed);      // «Ещё зовут»: the card, or someone inside it
             const same = x => n => n.toLowerCase() === String(x || '').toLowerCase();
-            const hit = allowed.find(same(cand)) || (via && allowed.find(same(via)));
+            const hit = allowed.find(same(cand)) || (via && allowed.find(same(via))) || (cand.toLowerCase() !== you && fuzzyName(cand, allowed.filter(x => x !== 'SYSTEM')));
             // BUG FIX (2.0.0): "[SYSTEM: Sam went offline]" lost its opening bracket here and
             // showed up as an ordinary bubble ending in a stray "]" — the event is kept whole
             // (2.0.1: "СИСТЕМА:" too)
@@ -2102,6 +2655,14 @@ function parseReply(raw, allowed, extra = []) {
             // A line after it with no name is not dropped — there is no telling whose it is,
             // and losing a real line of theirs would be worse; it goes to the card as before.
             else if (you && cand.toLowerCase() === you) { last = null; continue; }
+            else if (!hit && splitNames(cand).length > 1 && splitNames(cand).every(known)) {
+                // BUG FIX (2.1.1): "Ava, Bram: …" in a group showed the whole "Ava, Bram:" inside
+                // the bubble — several known names head the line: it is the first of them
+                // who is in the chat (not the player), and the names go
+                const parts = splitNames(cand).filter(x => x !== you);
+                const find = x => allowed.find(n => n.toLowerCase() === x) || byAlias(x, allowed) || extra.find(n => n.toLowerCase() === x);
+                who = parts.map(find).find(Boolean) || last || allowed[0]; text = rest;
+            }
             else if (hit) {
                 who = hit; text = rest;
                 // BUG FIX (2.0.0): "Академия…: Sam Lee: …" — the speaker's name stayed in the text
@@ -2139,8 +2700,9 @@ function castLine(names) {
     for (const n of names) for (const x of castList(n)) if (!c.includes(x)) c.push(x);
     return c.length ? `People who live in this story and may text too, each under their own name: ${c.join(', ')}.\n` : '';
 }
-function buildSystem(names, reasonLine) {
-    const cards = names.map(cardOf).join('\n\n');
+async function buildSystem(names, reasonLine) {
+    const cards = [];
+    for (const n of names) cards.push(await cardOf(n));   // one after another: a brief is one request at a time
     const you = name1 || 'the player';
     // BUG FIX (1.9.0): Tavern's substituteParams turns {{char}} into the character of
     // the OPEN chat — a phone contact from elsewhere was told it was someone else.
@@ -2152,20 +2714,24 @@ function buildSystem(names, reasonLine) {
     return `${base}
 
 CHARACTERS ON THIS PHONE (write only as these):
-${cards}
+${cards.join('\n\n')}
 ${castLine(names)}
 Language of every message: ${genLang()}.
 ${reasonLine || ''}`;
 }
 
+function shuffled(list) { const a = list.slice(); for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; }
 async function generateReply(names, reasonLine, isInitiative, contactId) {
     const primary = contactId || names[0];
     const th = threadOf(primary);
     const lastTs = th.length ? th[th.length - 1].ts : 0;
-    const sys = buildSystem(names, reasonLine);
+    // (2.1.0) a group's cards come in a new order every time: the model used to answer «first, second,
+    // third» in the order the cards stood
+    const sys = await buildSystem(isGroup(primary) ? shuffled(names) : names, reasonLine);
     const head = [timeContext(lastTs), diaryBlock(names, primary)];
     const tail = [
-        isGroup(primary) ? '[This is a GROUP thread: several of you are in the same conversation and may talk to each other.]' : '',
+        isGroup(primary) ? `[This is a GROUP chat. Not everyone answers every time — only those who have a reason to: whoever was addressed, whoever cares about the topic, whoever is free right now. Members react to EACH OTHER too, not only to ${name1 || 'the player'}: reply, tease, agree, argue, pick up what someone else said. No fixed order and no "one line each in turn": someone may stay silent, someone may send two lines in a row.]` : '',
+        inviteAllowed(primary) ? INVITE_RULE.split('{{user}}').join(name1 || 'the player') : '',
         isInitiative
             ? '[Write the next message(s) NOW, on your own initiative. Do not greet formally; continue naturally from everything above.]'
             : '[Write your reply now.]'
@@ -2188,7 +2754,87 @@ async function generateReply(names, reasonLine, isInitiative, contactId) {
     }
 
     const raw = await callAIComplete(sys, user);
-    return parseReply(raw, names.concat(['SYSTEM']), castOfContact(primary));
+    return takeInvite(parseReply(raw, names.concat(['SYSTEM']), castOfContact(primary)), primary);
+}
+
+/* ============================================================
+   INVITES BETWEEN THE WORLDS (2.1.4, approved). Now and then someone
+   asks the player to share a moment at a set time — «call me in 20
+   minutes», «at nine look at the moon with me». They both know they
+   can never meet. Write in that chat around the time (or call) and
+   it is kept; miss it and they did it alone — they say so, and it
+   may turn up in the feed. One open invite per person, two a day.
+   ============================================================ */
+const INVITE_RULE = `[Rarely — at most once in a long while, and only when it truly fits — you may invite {{user}} to share a moment across the worlds at a set time: "call me in 20 minutes", "at nine I'll be on the roof — look at the moon with me", "stay with me on the line while I walk home". You both know you can never meet in person — never suggest meeting physically. If you do invite, put it on its own line: [invite: <minutes from now, 5–120> | <what, a few words>]]`;
+const INVITE_MISSED_LINE = `[{{user}} missed your invite: "{{what}}". You did it alone. React in character — briefly, maybe a little wistful; no guilt-tripping.]`;
+const RE_INVITE = /\[\s*invite\s*:\s*(\d{1,3})\s*(?:min\w*|мин\w*)?\s*\|\s*([^\]\n]{2,120})\]/i;
+function invitesToday() { const d = new Date().toDateString(); return Object.values(settings.invites || {}).filter(v => v && new Date(v.made).toDateString() === d).length; }
+function inviteAllowed(id) {
+    if (!id || isGroup(id) || isUnknown(id) || settings.muted[id]) return false;
+    const v = (settings.invites || {})[id];
+    return !(v && v.state === 'open') && invitesToday() < 2;
+}
+function takeInvite(msgs, id) {
+    let got = null;
+    const out = [];
+    for (const m of msgs) {
+        const mm = RE_INVITE.exec(String(m.text || ''));
+        if (!mm) { out.push(m); continue; }
+        if (!got && inviteAllowed(id)) got = { mins: Math.max(5, Math.min(120, Number(mm[1]) || 20)), what: cleanLine(mm[2], 120), from: m.name };
+        const rest = String(m.text).replace(RE_INVITE, '').trim();
+        if (rest) out.push({ ...m, text: rest });
+    }
+    if (got && got.what) {
+        if (!settings.invites || typeof settings.invites !== 'object') settings.invites = {};
+        settings.invites[id] = { what: got.what, from: got.from || id, made: Date.now(), at: Date.now() + got.mins * 60000, state: 'open' };
+        saveSettings();
+    }
+    return out;
+}
+// the player wrote in that chat or called around the time — the moment is shared
+function inviteKept(id) {
+    const v = (settings.invites || {})[id];
+    // a little early counts (up to 10 min, or a third of the wait for a short invite) — a reply right after it was made does not
+    if (!v || v.state !== 'open' || Date.now() < v.at - Math.min(10 * 60000, (v.at - (v.made || v.at)) * 0.3)) return;
+    v.state = 'kept';
+    pushRaw(id, { who: 'char', name: v.from, text: `[SYSTEM: ${t('inv_kept_sys', { what: v.what })}]`, ts: Date.now() });
+    saveSettings();
+}
+let inviteBusy = false;
+async function inviteTick() {
+    if (!settings.enabled || inviteBusy) return;
+    for (const [id, v] of Object.entries(settings.invites || {})) {
+        if (!v || v.state !== 'open') continue;
+        if (!v.told && Date.now() >= v.at) {
+            v.told = 1; saveSettings();
+            notify(v.from, t('inv_now', { what: v.what }), id);
+        }
+        if (Date.now() < v.at + 15 * 60000) continue;
+        v.state = 'missed'; v.missedAt = Date.now();
+        pushRaw(id, { who: 'char', name: v.from, text: `[SYSTEM: ${t('inv_missed_sys', { what: v.what })}]`, ts: Date.now() });
+        saveSettings(); renderBubbles();
+        if (!apiKey() || busy || call || settings.blocked[id]) continue;
+        inviteBusy = true;
+        const rq = beginRequest(id);
+        try {
+            const msgs = await generateReply(contactMembers(id), '\n' + INVITE_MISSED_LINE.split('{{user}}').join(name1 || 'the player').split('{{what}}').join(v.what.replace(/"/g, "'")), true, id);
+            if (msgs.length && isCurrent(rq)) {
+                msgs.forEach(m => pushMsg(id, 'char', m.text, m.name));
+                if (currentContact() !== id || phoneTucked()) settings.unread[id] = (settings.unread[id] || 0) + msgs.length;
+                saveSettings(); renderButton(); notify(msgs[0].name, msgs[0].text, id);
+            }
+        } catch (e) { if (!(e && (e.name === 'AbortError' || e.name === 'TimeoutError'))) console.warn('[Phone] invite follow-up failed', e); }
+        finally { inviteBusy = false; if (isCurrent(rq)) { finishRequest(rq); renderBubbles(); } }
+        break;
+    }
+    // old invites leave after two days
+    for (const [id, v] of Object.entries(settings.invites || {})) if (!v || (v.state !== 'open' && Date.now() - (v.missedAt || v.at) > 2 * 86400000)) delete settings.invites[id];
+}
+function inviteBar(id) {
+    const v = (settings.invites || {})[id];
+    if (!v || v.state !== 'open') return '';
+    const mins = Math.round((v.at - Date.now()) / 60000);
+    return `<div class="rph-invite${mins <= 0 ? ' now' : ''}" role="status"><i class="fa-solid fa-hourglass-half" aria-hidden="true"></i><span><b>${escapeHtml(v.what)}</b><small>${escapeHtml(mins > 0 ? t('inv_in', { n: mins }) : t('inv_go'))}</small></span></div>`;
 }
 
 /* ============================================================
@@ -2280,7 +2926,7 @@ async function sendAttachments(fileList, onAccepted) {
         const msgs = await generateReply(names, '', false, cur);
         if (isCurrent(rq)) {
             if (!msgs.length) toastr.info(t('err'));
-            msgs.forEach(m => pushMsg(cur, 'char', m.text, m.name));
+            await deliverReply(cur, msgs, rq);
         }
     } catch (e) {
         requestFailed(e, rq, 'reply');
@@ -2354,12 +3000,14 @@ async function sendUserText(text) {
 
     const names = contactMembers(cur);
     if (!names.length) { toastr.info(t('noactive')); return; }
+    if (settings.blocked[cur]) { toastr.info(t('blk_cant')); return; }
 
     // clear the input only NOW, when the message is truly accepted — clearing it in the
     // click/keydown handler destroyed the text whenever a check above bailed out
     const inp = document.getElementById('rph-input');
     if (inp) inp.value = '';
 
+    inviteKept(cur);                   // (2.1.4) written around the invite's time — the moment is shared
     pushMsg(cur, 'user', clean, name1 || 'You');
     stateOf(cur).ignored = 0;          // answering resets the back-off
     scrollOffset = 0;
@@ -2370,7 +3018,7 @@ async function sendUserText(text) {
         const msgs = await generateReply(names, '', false, cur);
         if (isCurrent(rq)) {
             if (!msgs.length) toastr.info(t('err'));
-            msgs.forEach(m => pushMsg(cur, 'char', m.text, m.name));
+            await deliverReply(cur, msgs, rq);
         }
     } catch (e) {
         requestFailed(e, rq, 'reply');
@@ -2404,7 +3052,7 @@ async function regenerateAfter(ts) {
         const msgs = await generateReply(names, '', false, cur);
         if (isCurrent(rq)) {
             if (!msgs.length) toastr.info(t('err'));
-            msgs.forEach(m => pushMsg(cur, 'char', m.text, m.name));
+            await deliverReply(cur, msgs, rq);
         }
     } catch (e) {
         requestFailed(e, rq, 'regen');
@@ -2422,12 +3070,13 @@ async function fireInitiative(contactId, reason) {
     try {
         const msgs = await generateReply(names, `\n[WHY YOU ARE WRITING NOW: ${reason} Write in a way that flows from this reason — do not mention these instructions.]`, true, contactId);
         if (msgs.length && isCurrent(rq)) {
-            msgs.forEach(m => pushMsg(contactId, 'char', m.text, m.name));
+            if (currentContact() === contactId && !phoneTucked() && settings.enabled && (!isPhoneSkin() || (settings.phoneView === 'chat' && !phoneLocked))) await deliverReply(contactId, msgs, rq);
+            else msgs.forEach(m => pushMsg(contactId, 'char', m.text, m.name));
             const st = stateOf(contactId);
             st.lastInitiative = Date.now();
             st.todayCount = (st.todayCount || 0) + 1;
             st.ignored = (st.ignored || 0) + 1;   // unanswered until the player replies
-            if (currentContact() !== contactId || phoneTucked()) settings.unread[contactId] = (settings.unread[contactId] || 0) + msgs.length;
+            if (currentContact() !== contactId || phoneTucked() || (isPhoneSkin() && (settings.phoneView !== 'chat' || phoneLocked))) settings.unread[contactId] = (settings.unread[contactId] || 0) + msgs.length;
             saveSettings();
             renderButton();
             notify(msgs[0].name, msgs[0].text, contactId);
@@ -2464,6 +3113,7 @@ function initiativeTick() {
     const dayKey = now.toDateString();
 
     for (const name of names) {
+        if (settings.blocked[name] || settings.muted[name] || isUnknown(name)) continue;   // (2.1.0) a blocked contact stays silent; an unknown number writes only once; (2.1.5) a muted one does not write first
         const st = stateOf(name);
         if (st.dayStamp !== dayKey) { st.dayStamp = dayKey; st.todayCount = 0; }
         if (st.todayCount >= settings.maxPerDay) continue;
@@ -2521,7 +3171,9 @@ function initiativeTick() {
             }
         }
 
-        fireInitiative(name, reason);
+        // (2.1.0) now and then they call instead of writing
+        if (!isGroup(name) && !call && !settings.muted[name] && isPhoneSkin() && Math.random() * 100 < (settings.callChance || 0)) startCall(name, 'in', reason);
+        else fireInitiative(name, reason);
         break;   // one initiative per tick — never a pile-up
     }
 }
@@ -2538,8 +3190,9 @@ function avaKey(name) {
     return ch && ch.avatar ? ch.avatar : '';
 }
 function avatarHtml(name) {
-    const ch = characters.find(c => c.name === name);
-    if (ch && ch.avatar) return `<img class="rph-ava" src="/thumbnail?type=avatar&file=${encodeURIComponent(ch.avatar)}" draggable="false">`;
+    if (!characters.some(c => c.name === name) && Object.values(settings.unknown || {}).some(u => u && (u.from || t('unk_unknown')) === name)) return UNKNOWN_AVA;
+    const ch = cardFor(name);
+    if (ch && ch.avatar) return `<img class="rph-ava" src="/thumbnail?type=avatar&file=${encodeURIComponent(ch.avatar)}" alt="${escapeHtml(name)}" draggable="false">`;
     let hue = 0; for (const c of String(name)) hue = (hue * 31 + c.charCodeAt(0)) % 360;
     const ini = escapeHtml(String(name).trim().split(/\s+/).map(w => w[0]).join('').slice(0, 2).toUpperCase());
     return `<span class="rph-ava rph-ava-npc" style="background:hsl(${hue},45%,40%)">${ini}</span>`;
@@ -2557,13 +3210,18 @@ function ensureLayer() {
                     <span class="rph-clock"></span><span class="rph-island"></span>
                     <span class="rph-sicons"><i class="fa-solid fa-signal"></i><i class="fa-solid fa-wifi"></i><i class="fa-solid fa-battery-three-quarters"></i></span>
                 </div>
+                <div class="rph-view rph-v-lock" role="region"></div>
+                <div class="rph-view rph-v-home" role="region"></div>
+                <div class="rph-view rph-v-app" role="region"></div>
+                <div class="rph-view rph-v-call" role="region"></div>
                 <div class="rph-top">
                     <i class="fa-solid fa-chevron-left rph-tbtn" id="rph-contacts"></i>
                     <span class="rph-top-ava"></span>
                     <div class="rph-top-who"><b class="rph-top-name"></b><small class="rph-top-sub"></small></div>
-                    <i class="fa-solid fa-minus rph-tbtn" id="rph-min"></i>
+                    <i class="fa-solid fa-chevron-down rph-tbtn" id="rph-min" role="button" tabindex="0"></i>
                 </div>
                 <div id="rph-tabs"></div>
+                <div id="rph-invite-slot" aria-live="polite"></div>
                 <div id="rph-stack"></div>
                 <div id="rph-bar">
                     <div id="rph-pend" hidden></div>
@@ -2603,7 +3261,41 @@ function ensureLayer() {
             e.stopPropagation();
             if (e.key === 'Enter') sendFromBar();
         });
-        $('#rph-contacts').on('click', () => { renderRoster(); $('#rph-roster').toggleClass('visible'); });
+        // phone skins: ‹ goes back to the list of conversations; the floating bubbles keep their roster
+        $('#rph-contacts').on('click', () => { if (isPhoneSkin()) { setView('messages'); return; } renderRoster(); $('#rph-roster').toggleClass('visible'); });
+        // the line at the bottom of a phone is its home button
+        d.querySelector('.rph-home').addEventListener('click', () => { if (isPhoneSkin()) { phoneLocked = false; setView('home'); } });
+        d.querySelector('.rph-v-home').addEventListener('click', onHomeClick);
+        d.querySelector('.rph-v-app').addEventListener('click', onHomeClick);
+        d.querySelector('.rph-v-app').addEventListener('click', onFeedClick);
+        d.querySelector('.rph-v-call').addEventListener('click', onCallClick);
+        d.querySelector('.rph-v-app').addEventListener('click', onGalleryClick);
+        d.querySelector('.rph-v-app').addEventListener('click', onCalendarClick);
+        d.querySelector('.rph-v-app').addEventListener('click', onMapsClick);
+        d.querySelector('.rph-v-app').addEventListener('click', onMailClick);
+        d.querySelector('.rph-v-app').addEventListener('click', onMusicClick);
+        d.querySelector('.rph-v-app').addEventListener('click', onShopClick);
+        d.querySelector('.rph-v-lock').addEventListener('click', onLockClick);
+        d.addEventListener('keydown', (e) => {
+            if (!isPhoneSkin()) return;
+            if (e.key === 'Enter' && e.target.classList.contains('rph-fd-in')) { e.preventDefault(); e.stopPropagation(); e.target.closest('.rph-fd-reply').querySelector('.rph-fd-send').click(); return; }
+            if (e.target.classList.contains('rph-fd-in')) { e.stopPropagation(); return; }   // Tavern's hotkeys stay out of a comment
+            if (e.target.closest('.rph-cal-form')) { e.stopPropagation(); if (e.key === 'Enter' && e.target.classList.contains('rph-cal-text')) { e.preventDefault(); d.querySelector('.rph-cal-form [data-cal="save"]')?.click(); } if (e.key !== 'Escape') return; if (e.key === 'Escape') { e.preventDefault(); calEdit = null; renderBubbles(); return; } }
+            if (e.target.classList.contains('rph-call-in')) { e.stopPropagation(); if (e.key === 'Enter') { e.preventDefault(); e.target.closest('.rph-call-say').querySelector('.rph-call-send').click(); } return; }
+            if (call) return;   // a call is ended only by its own red button
+            if (settings.phoneView === 'shop' && shopBuying && e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); shopBuying = ''; renderBubbles(); return; }
+            if (settings.phoneView === 'mail' && mailOpen && e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); mailOpen = ''; renderBubbles(); return; }
+            if (settings.phoneView === 'maps' && mapOpen && e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); mapOpen = ''; mapShare = false; renderBubbles(); return; }
+            if (settings.phoneView === 'gallery' && galOpen) {
+                if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); galLast = galOpen; galOpen = ''; renderBubbles(); return; }
+                if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') { e.preventDefault(); d.querySelector(`.rph-gal-act[data-gal="${e.key === 'ArrowRight' ? 'next' : 'prev'}"]`)?.click(); return; }
+            }
+            if (e.key === 'Escape' && (phoneLocked || ['messages', 'contacts', 'feed', 'calls', 'gallery', 'calendar', 'maps', 'mail', 'music', 'shop'].includes(settings.phoneView)) && !e.target.closest('input, textarea, select')) {
+                e.preventDefault(); e.stopPropagation();
+                if (phoneLocked) { phoneLocked = false; setView('home'); } else setView(settings.phoneView === 'contacts' && rosterDetail ? 'contacts' : 'home');
+                if (settings.phoneView === 'contacts' && rosterDetail) { rosterDetail = null; renderRoster(); }
+            } else if ((e.key === 'Enter' || e.key === ' ') && e.target.matches('[data-act]:not(button)')) { e.preventDefault(); e.target.click(); }
+        });
         $('#rph-min').on('click', () => {
             settings.phoneMin = true; saveSettings();
             $('#rph-roster').removeClass('visible');
@@ -2733,13 +3425,1733 @@ function renderPhoneTop(cur) {
     if (!ava) return;
     const label = cur ? contactLabel(cur) : t('title');
     const avaHtml = !cur ? '<span class="rph-ava rph-ava-npc"><i class="fa-solid fa-mobile-screen-button"></i></span>'
-        : isGroup(cur) ? `<span class="rph-ava rph-ava-npc" style="background:#3c5a8a"><i class="fa-solid fa-users"></i></span>` : avatarHtml(cur);
-    const who = String(cur || '') + '|' + (cur && !isGroup(cur) ? avaKey(cur) : '');
+        : contactAva(cur);
+    const who = String(cur || '') + '|' + (cur ? (isGroup(cur) ? groupMemberNames(cur).slice(0, 3).map(n => n + avaKey(n)).join(',') : avaKey(cur)) : '');
     if (ava.dataset.who !== who) { ava.innerHTML = avaHtml; ava.dataset.who = who; }
     $('#rph-layer .rph-top-name').text(label);
     const typing = busy && cur && busyFor === cur;
-    $('#rph-layer .rph-top-sub').text(typing ? t('typing') : (cur ? t('online') : '')).toggleClass('typing', !!typing);
+    { const sl = document.getElementById('rph-invite-slot'); if (sl) { const h = cur ? inviteBar(cur) : ''; if (sl.dataset.sig !== h) { sl.innerHTML = h; sl.dataset.sig = h; } } }
+    $('#rph-layer .rph-top-sub').text(typing ? (typingName ? t('typing_who', { name: typingName }) : t('typing')) : (cur ? (isGroup(cur) ? t('grp_members', { n: contactMembers(cur).length }) : (statusOf(cur) || t('online'))) : '')).toggleClass('typing', !!typing);
 }
+/* ============================================================
+   HOME SCREEN (2.1.0) — a phone that is a phone, not a chat box.
+   Lock screen (only when someone wrote while it was put away): the
+   clock and who wrote — a tap opens that conversation. Home: a big
+   clock, the story's weather and place (Scene Card / RPG Map, when
+   they are there), the latest conversations, the current event, and
+   the apps along the bottom. «Messages» lists every conversation;
+   «Contacts» is the former «Who is online», now inside the phone.
+   The floating-bubbles skin (arc) is untouched.
+   ============================================================ */
+let phoneLocked = false;
+let kbNav = false;   // the focus follows a screen change only when the keyboard is in use (no ring after a click)
+document.addEventListener('keydown', () => { kbNav = true; }, true);
+document.addEventListener('pointerdown', () => { kbNav = false; }, true);
+// (2.1.4) moving deeper slides in from the right, coming back from the left; an app opened from
+// its icon grows out of that icon
+const VIEW_DEPTH = { lock: 0, home: 1, chat: 3, call: 4 };
+let viewFrom = null;     // the icon an app was opened from (for the zoom)
+function setView(v) {
+    if (!PHONE_VIEWS.includes(v)) v = 'home';
+    { const layer = document.getElementById('rph-layer'); if (layer) {
+        const was = settings.phoneView, d0 = VIEW_DEPTH[was] ?? 2, d1 = VIEW_DEPTH[v] ?? 2;
+        layer.dataset.dir = d1 > d0 ? 'in' : d1 < d0 ? 'out' : 'same';
+        if (viewFrom && d1 === 2 && was === 'home') {
+            const L = layer.getBoundingClientRect(), r = viewFrom.getBoundingClientRect();
+            layer.style.setProperty('--vo-x', Math.round(r.left + r.width / 2 - L.left) + 'px'); layer.style.setProperty('--vo-y', Math.round(r.top + r.height / 2 - L.top) + 'px');
+            layer.dataset.dir = 'zoom';
+        }
+        viewFrom = null;
+    } }
+    if (v !== 'contacts') { rosterEdit = null; }
+    if (v === 'home') { homePage = 0; const pg = document.querySelector('#rph-layer .rph-hs-pages'); if (pg) pg.scrollLeft = 0; }   // home always opens on its first page, as on a phone
+    settings.phoneView = v;
+    saveSettings();
+    renderBubbles();
+    const layer = document.getElementById('rph-layer');
+    const focusEl = layer && layer.querySelector(v === 'chat' ? '#rph-input' : `.rph-v-${v === 'home' ? 'home' : 'app'} [data-focus]`);
+    if (focusEl && v !== 'chat' && kbNav) focusEl.focus({ preventScroll: true });
+}
+function totalUnread() { return contactList().filter(shownInLists).reduce((a, id) => a + unreadOf(id), 0); }
+// one line about the last message, the way a phone shows it in a list
+function previewOf(m) {
+    if (!m) return '';
+    const k = classify(m.text);
+    const who = m.who === 'user' ? t('pv_you') + ': ' : '';
+    if (k.type === 'image') return `<i class="fa-solid fa-camera" aria-hidden="true"></i> ${escapeHtml(who + (k.caption || t('pv_photo')))}`;
+    if (k.type === 'voice') return `<i class="fa-solid fa-microphone" aria-hidden="true"></i> ${escapeHtml(who + t('pv_voice'))}`;
+    if (k.type === 'file') return `<i class="fa-solid fa-paperclip" aria-hidden="true"></i> ${escapeHtml(who + (k.caption || t('pv_file')))}`;
+    if (k.type === 'system') return `<i class="fa-solid ${/\d:\d\d|звон|call/i.test(k.text) ? 'fa-phone' : 'fa-circle-info'}" aria-hidden="true"></i> ${escapeHtml(String(k.text || '').slice(0, 80))}`;
+    const txt = stripNamePrefix(k.text || k.caption || m.text, [m.name]).replace(/\s+/g, ' ').trim();
+    return escapeHtml(who + txt.slice(0, 90));
+}
+function whenShort(ts) {
+    if (!ts) return '';
+    const d = new Date(ts), now = new Date();
+    const hm = String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+    if (d.toDateString() === now.toDateString()) return hm;
+    const y = new Date(now); y.setDate(now.getDate() - 1);
+    if (d.toDateString() === y.toDateString()) return t('yesterday');
+    return d.toLocaleDateString(settings.language === 'en' ? 'en-GB' : 'ru-RU', { day: 'numeric', month: 'short' });
+}
+// every conversation, the newest first, with its last message
+function conversations() {
+    return contactList().filter(shownInLists).map(id => { const th = threadOf(id); const last = th[th.length - 1] || null; return { id, last, ts: last ? last.ts : 0, un: unreadOf(id) }; })
+        .sort((a, b) => b.ts - a.ts);
+}
+function contactAva(id) { return isGroup(id) ? groupAvaHtml(id) : isUnknown(id) ? UNKNOWN_AVA : avatarHtml(id); }
+const UNKNOWN_AVA = '<span class="rph-ava rph-ava-npc rph-ava-unk"><i class="fa-solid fa-user-secret" aria-hidden="true"></i></span>';
+// (2.1.0) with something unread, the list shows the newest message FROM them (not your own words or a call line)
+function shownLast(c) {
+    if (!c.un) return c.last;
+    const th = threadOf(c.id);
+    for (let i = th.length - 1; i >= 0; i--) if (th[i].who === 'char' && classify(th[i].text).type !== 'system') return th[i];
+    return c.last;
+}
+function convRow(c) {
+    const label = contactLabel(c.id);
+    c = Object.assign({}, c, { last: shownLast(c) });
+    return `<div class="rph-conv${c.un ? ' unread' : ''}" role="button" tabindex="0" data-act="open" data-id="${escapeHtml(c.id)}" aria-label="${escapeHtml(label + (c.un ? ' · ' + t('pv_unread', { n: c.un }) : ''))}">
+        ${contactAva(c.id)}
+        <span class="rph-conv-who"><b>${escapeHtml(label)}${settings.muted[c.id] ? ` <i class="fa-solid fa-bell-slash rph-muted-ic" aria-label="${escapeHtml(t('mute_state'))}" role="img"></i>` : ''}</b><small>${c.last ? previewOf(c.last) : escapeHtml(t('pv_empty'))}</small></span>
+        <span class="rph-conv-meta"><small>${escapeHtml(whenShort(c.ts))}</small>${c.un ? `<span class="rph-badge-n${settings.muted[c.id] ? ' quiet' : ''}">${c.un > 9 ? '9+' : c.un}</span>` : ''}</span>
+    </div>`;
+}
+// the story's own date, weather and place, from the Scene Card and RPG Map (nothing is asked of a model)
+function storyWorld() {
+    try { const w = window.RPG && window.RPG.world && window.RPG.world.get(); return w || null; } catch (e) { return null; }
+}
+function weatherIcon(w) {
+    const s = String(w || '').toLowerCase();
+    if (/thunder|storm|гроз|шторм/.test(s)) return 'fa-cloud-bolt';
+    if (/snow|снег|метел|вьюг/.test(s)) return 'fa-snowflake';
+    if (/rain|drizzle|shower|дожд|ливен|морос/.test(s)) return 'fa-cloud-rain';
+    if (/fog|mist|haze|туман|дымк|мгла/.test(s)) return 'fa-smog';
+    if (/wind|ветер|ветрен/.test(s)) return 'fa-wind';
+    if (/cloud|overcast|облач|пасмур|туч/.test(s)) return 'fa-cloud';
+    if (/night|ночь|ночн/.test(s)) return 'fa-moon';
+    if (/sun|clear|ясн|солн/.test(s)) return 'fa-sun';
+    return 'fa-cloud-sun';
+}
+// the event of the story right now (Tavern RPG Engine's card), for the «coming up» widget
+function storyEvent() {
+    try { const q = window.RPG && window.RPG.quest; const e = q && q.event && (!q.isEnabled || q.isEnabled()) ? q.event() : null; return e && e.title && e.status !== 'done' ? e : null; } catch (e) { return null; }
+}
+// (2.1.0) the dock keeps four; the rest stand on the second page of the home screen
+const HOME_APPS = [
+    { id: 'calls', icon: 'fa-phone', label: 'app_calls' },
+    { id: 'messages', icon: 'fa-comment', label: 'app_messages' },
+    { id: 'contacts', icon: 'fa-address-book', label: 'app_contacts' },
+    { id: 'feed', icon: 'fa-newspaper', label: 'app_feed' },
+];
+const GRID_APPS = [
+    { id: 'gallery', icon: 'fa-images', label: 'app_gallery' },
+    { id: 'calendar', icon: 'fa-calendar-days', label: 'app_calendar' },
+    { id: 'maps', icon: 'fa-map-location-dot', label: 'app_maps', needs: () => !!mapBridge() },
+    { id: 'mail', icon: 'fa-envelope', label: 'app_mail' },
+    { id: 'music', icon: 'fa-music', label: 'app_music' },
+    { id: 'shop', icon: 'fa-bag-shopping', label: 'app_shop' },
+    { id: 'wall', icon: 'fa-image', label: 'app_wall' },
+];
+function appIcon(a) {
+    const n = a.id === 'messages' ? totalUnread() : a.id === 'feed' ? (feedStore().unseen || 0) : a.id === 'calls' ? (settings.callsUnseen || 0) : a.id === 'mail' ? settings.mail.filter(x => !x.read).length : 0;
+    return `<button type="button" class="rph-app" data-act="app" data-app="${a.id}" aria-label="${escapeHtml(t(a.label) + (n ? ' · ' + t('pv_unread', { n }) : ''))}">
+        <span class="rph-app-ic ic-${a.id}"><i class="fa-solid ${a.icon}" aria-hidden="true"></i>${n ? `<span class="rph-badge-n">${n > 9 ? '9+' : n}</span>` : ''}</span>
+        <span class="rph-app-name">${escapeHtml(t(a.label))}</span>
+    </button>`;
+}
+function clockParts() {
+    const d = new Date();
+    const loc = settings.language === 'en' ? 'en-GB' : 'ru-RU';
+    return { hm: String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'), date: (x => x.charAt(0).toUpperCase() + x.slice(1))(d.toLocaleDateString(loc, { weekday: 'long', day: 'numeric', month: 'long' })) };
+}
+function renderHome(box) {
+    dailySparks();
+    const c = clockParts();
+    const w = storyWorld();
+    const ev = storyEvent();
+    const convs = conversations().slice(0, 3);
+    const worldBits = w ? [w.weather, w.place, [w.date, w.time].filter(Boolean).join(', ')].filter(Boolean) : [];
+    const html = `<div class="rph-hs">
+        <div class="rph-hs-clock"><b class="rph-hs-time">${c.hm}</b><span class="rph-hs-date">${escapeHtml(c.date)}</span></div>
+        ${worldBits.length ? `<div class="rph-wg rph-wg-world" aria-label="${escapeHtml(t('wg_world'))}">
+            <i class="fa-solid ${weatherIcon(w.weather)} rph-wg-wicon" aria-hidden="true"></i>
+            <span class="rph-wg-wtext">${w.weather ? `<b>${escapeHtml(String(w.weather).slice(0, 40))}</b>` : ''}${w.place ? `<small><i class="fa-solid fa-location-dot" aria-hidden="true"></i> ${escapeHtml(String(w.place).slice(0, 50))}</small>` : ''}${w.date || w.time ? `<small>${escapeHtml([w.date, w.time].filter(Boolean).join(', ').slice(0, 50))}</small>` : ''}</span>
+        </div>` : ''}
+        ${(() => { const nw = suiteNews(); return nw.length ? `<div class="rph-wg rph-wg-news"><div class="rph-wg-head"><span>${escapeHtml(t('nt_title'))}</span></div>${nw.map(x => newsRow(x, false)).join('')}</div>` : ''; })()}
+        <div class="rph-wg rph-wg-msgs">
+            <div class="rph-wg-head"><span>${escapeHtml(t('app_messages'))}</span>${totalUnread() ? `<span class="rph-wg-un">${escapeHtml(t('pv_unread', { n: totalUnread() }))}</span>` : ''}</div>
+            ${convs.length ? convs.map(convRow).join('') : `<button type="button" class="rph-wg-empty" data-act="app" data-app="contacts">${escapeHtml(t('wg_nobody'))}</button>`}
+        </div>
+        ${(() => { const iv = Object.entries(settings.invites || {}).find(([, v]) => v && v.state === 'open'); if (!iv) return ''; const [id, v] = iv; const mins = Math.max(0, Math.round((v.at - Date.now()) / 60000)); return `<button type="button" class="rph-wg rph-wg-soon" data-act="open" data-id="${escapeHtml(id)}"><div class="rph-wg-head"><span>${escapeHtml(t('wg_invite'))}</span></div><span class="rph-wg-soon-row"><i class="fa-solid fa-hourglass-half" aria-hidden="true"></i><span><b>${escapeHtml(v.from + ': ' + v.what)}</b><small>${escapeHtml(mins > 0 ? t('inv_in', { n: mins }) : t('inv_go'))}</small></span></span></button>`; })()}
+        ${(() => { const nx = calUpcoming()[0]; if (!nx) return ''; const loc = settings.language === 'en' ? 'en-GB' : 'ru-RU'; return `<button type="button" class="rph-wg rph-wg-soon" data-act="app" data-app="calendar"><div class="rph-wg-head"><span>${escapeHtml(t('wg_soon'))}</span></div><span class="rph-wg-soon-row"><i class="fa-solid ${nx.kind === 'bd' ? 'fa-cake-candles' : 'fa-bell'}" aria-hidden="true"></i><span><b>${escapeHtml(nx.text)}</b><small>${escapeHtml(new Date(nx.date + 'T00:00').toLocaleDateString(loc, { weekday: 'short', day: 'numeric', month: 'long' }) + (nx.time ? ', ' + nx.time : ''))}</small></span></span></button>`; })()}
+        ${ev && ev.title === settings.eventSeen ? `<div class="rph-wg rph-wg-event"><div class="rph-wg-head"><span>${escapeHtml(t('wg_event'))}</span></div><b>${escapeHtml(String(ev.title).slice(0, 80))}</b>${ev.desc ? `<small>${escapeHtml(String(ev.desc).slice(0, 140))}</small>` : ''}</div>` : ''}
+    </div>
+    <div class="rph-hs rph-hs-apps" role="group" aria-label="${escapeHtml(t('hs_apps'))}"><div class="rph-grid">${GRID_APPS.filter(a => !a.needs || a.needs()).map(appIcon).join('')}</div></div>
+    </div>
+    <div class="rph-hs-dots" role="tablist" aria-label="${escapeHtml(t('hs_pages'))}">${[0, 1].map(i => `<button type="button" role="tab" class="rph-dot" data-page="${i}" aria-label="${escapeHtml(t('hs_page', { n: i + 1 }))}" aria-selected="${i === homePage}"></button>`).join('')}</div>
+    <nav class="rph-dock" aria-label="${escapeHtml(t('dock'))}">${HOME_APPS.map(appIcon).join('')}</nav>`;
+    // OPTIMIZATION (2.1.0): the minute changing is not a reason to rebuild the screen — only its digits change
+    const sigH = html.split(`<b class="rph-hs-time">${c.hm}</b>`).join('');
+    if (box.dataset.sig === sigH) { const tm = box.querySelector('.rph-hs-time'); if (tm && tm.textContent !== c.hm) tm.textContent = c.hm; }
+    else {
+        box.innerHTML = html.replace('<div class="rph-hs">', '<div class="rph-hs-pages"><div class="rph-hs">');
+        box.dataset.sig = sigH;
+        const pages = box.querySelector('.rph-hs-pages');
+        pages.scrollLeft = homePage * pages.clientWidth;
+        let raf = 0;
+        pages.addEventListener('scroll', () => { if (raf) return; raf = requestAnimationFrame(() => { raf = 0; const i = Math.round(pages.scrollLeft / Math.max(1, pages.clientWidth)); if (i !== homePage) { homePage = i; box.querySelectorAll('.rph-dot').forEach((d, k) => d.setAttribute('aria-selected', String(k === i))); } }); }, { passive: true });
+        // a mouse can turn the page too: drag sideways, or the wheel over the pages
+        let drag = null;
+        pages.addEventListener('pointerdown', e => { if (e.pointerType !== 'mouse' || e.button !== 0) return; drag = { x: e.clientX, left: pages.scrollLeft, moved: false }; });
+        pages.addEventListener('pointermove', e => { if (!drag) return; const dx = e.clientX - drag.x; if (Math.abs(dx) > 6) { drag.moved = true; pages.style.scrollSnapType = 'none'; pages.scrollLeft = drag.left - dx; } });
+        const endDrag = () => {
+            if (!drag) return;
+            const moved = drag.moved, from = drag.left; drag = null;
+            if (!moved) return;
+            const dir = pages.scrollLeft > from ? 1 : pages.scrollLeft < from ? -1 : 0;
+            goHomePage(box, Math.max(0, Math.min(1, Math.round(from / Math.max(1, pages.clientWidth)) + dir)));
+            setTimeout(() => { pages.style.scrollSnapType = ''; }, 450);    // snapping again only once the page has turned
+            pages.addEventListener('click', ev => { ev.stopPropagation(); ev.preventDefault(); }, { capture: true, once: true });
+        };
+        pages.addEventListener('pointerup', endDrag); pages.addEventListener('pointerleave', endDrag);
+        pages.addEventListener('wheel', e => { if (Math.abs(e.deltaX) > Math.abs(e.deltaY) || e.shiftKey) return; const hs = e.target.closest('.rph-hs'); if (hs && hs.scrollHeight > hs.clientHeight + 2 && !hs.classList.contains('rph-hs-apps')) return; if (Math.abs(e.deltaY) < 8) return; e.preventDefault(); goHomePage(box, e.deltaY > 0 ? 1 : 0); }, { passive: false });
+    }
+}
+let homePage = 0;   // (2.1.0) which page of the home screen is showing
+function goHomePage(box, i) {
+    const pages = box.querySelector('.rph-hs-pages');
+    if (!pages) return;
+    homePage = Math.max(0, Math.min(1, i));
+    pages.scrollTo({ left: homePage * pages.clientWidth, behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+    box.querySelectorAll('.rph-dot').forEach((d, k) => d.setAttribute('aria-selected', String(k === homePage)));
+}
+function renderLock(box) {
+    const c = clockParts();
+    const news = conversations().filter(x => x.un > 0);
+    const html = `<div class="rph-lk">
+        <i class="fa-solid fa-lock rph-lk-lock" aria-hidden="true"></i>
+        <b class="rph-lk-time">${c.hm}</b><span class="rph-lk-date">${escapeHtml(c.date)}</span>
+        <div class="rph-lk-notes" aria-live="polite">${suiteNews().map(x => newsRow(x, true)).join('')}${feedLockNote()}${news.map(x => `<div class="rph-note" role="button" tabindex="0" data-act="open" data-id="${escapeHtml(x.id)}">
+            ${contactAva(x.id)}<span class="rph-note-body"><span class="rph-note-top"><b>${escapeHtml(contactLabel(x.id))}</b><small>${escapeHtml(whenShort(x.ts))}</small></span><small>${shownLast(x) ? previewOf(shownLast(x)) : ''}</small>${x.un > 1 ? `<small class="rph-note-more">${escapeHtml(t('pv_more', { n: x.un - 1 }))}</small>` : ''}</span>
+        </div>`).join('')}</div>
+        <button type="button" class="rph-lk-open" data-act="unlock" data-focus>${escapeHtml(t('lk_open'))}</button>
+    </div>`;
+    const sigL = html.split(`<b class="rph-lk-time">${c.hm}</b>`).join('');
+    if (box.dataset.sig === sigL) { const tm = box.querySelector('.rph-lk-time'); if (tm && tm.textContent !== c.hm) tm.textContent = c.hm; }
+    else { box.innerHTML = html; box.dataset.sig = sigL; }
+}
+function feedLockNote() {
+    const f = feedStore(); const k = f.unseen || 0;
+    if (!k) return '';
+    const last = f.posts[f.posts.length - 1];
+    return `<div class="rph-note" role="button" tabindex="0" data-act="app" data-app="feed">
+        <span class="rph-app-ic ic-feed rph-note-ic"><i class="fa-solid fa-newspaper" aria-hidden="true"></i></span><span class="rph-note-body"><span class="rph-note-top"><b>${escapeHtml(t('app_feed'))}</b><small>${escapeHtml(whenShort(last ? last.ts : 0))}</small></span><small>${last ? escapeHtml(t('feed_note', { name: last.author }) + ' ' + last.text) : ''}</small>${k > 1 ? `<small class="rph-note-more">${escapeHtml(t('pv_more', { n: k - 1 }))}</small>` : ''}</span>
+    </div>`;
+}
+function renderMessagesApp(box) {
+    const convs = conversations();
+    const html = `<div class="rph-apphead"><button type="button" class="rph-tbtn" data-act="home" aria-label="${escapeHtml(t('lk_home'))}" data-focus><i class="fa-solid fa-chevron-left" aria-hidden="true"></i></button><b>${escapeHtml(t('app_messages'))}</b>
+        <button type="button" class="rph-tbtn" data-act="newgroup" aria-label="${escapeHtml(t('grp_new'))}" title="${escapeHtml(t('grp_new'))}"><i class="fa-solid fa-user-plus" aria-hidden="true"></i></button></div>
+        <div class="rph-appbody">${convs.length ? convs.map(convRow).join('') : `<button type="button" class="rph-wg-empty" data-act="app" data-app="contacts">${escapeHtml(t('wg_nobody'))}</button>`}</div>`;
+    if (box.dataset.sig !== html) { box.innerHTML = html; box.dataset.sig = html; }
+}
+// «Contacts» is the roster itself: its body moves into the phone, and back out for the arc
+function renderContactsApp(box) {
+    const head = box.querySelector('.rph-apphead.contacts');
+    if (head && head.dataset.lang !== settings.language) { head.querySelector('b').textContent = t('app_contacts'); head.querySelector('[data-act="back-contacts"]').setAttribute('aria-label', t('lk_home')); head.dataset.lang = settings.language; }   // a language switch
+    if (!head) {
+        box.innerHTML = `<div class="rph-apphead contacts" data-lang="${escapeHtml(settings.language)}"><button type="button" class="rph-tbtn" data-act="back-contacts" aria-label="${escapeHtml(t('lk_home'))}" data-focus><i class="fa-solid fa-chevron-left" aria-hidden="true"></i></button><b>${escapeHtml(t('app_contacts'))}</b><span class="rph-tbtn-gap"></span></div><div class="rph-appbody rph-roster-in"></div>`;
+        box.dataset.sig = '';
+    }
+    const body = document.getElementById('rph-roster-body');
+    const slot = box.querySelector('.rph-roster-in');
+    if (body && slot && body.parentElement !== slot) slot.appendChild(body);
+    $('#rph-roster').removeClass('visible');
+    renderRoster();
+}
+function parkRoster() {
+    const body = document.getElementById('rph-roster-body');
+    const home = document.getElementById('rph-roster');
+    if (body && home && body.parentElement !== home) home.appendChild(body);
+}
+function renderView(layer) {
+    const v = call ? 'call' : phoneLocked ? 'lock' : settings.phoneView;
+    if (layer.dataset.view !== v) layer.dataset.view = v;
+    const app = layer.querySelector('.rph-v-app');
+    // (2.1.5) an app redrawn while scrolled (a new message, a like, a timer) kept jumping to the top:
+    // the scroll of its list is kept when the same app is drawn again
+    const scBody = app && app.querySelector(':scope > .rph-appbody'), scTop = scBody ? scBody.scrollTop : 0, scWas = app && app.dataset.rv;
+    if (app) app.dataset.rv = v;
+    try { renderViewInner(layer, v, app); }
+    finally {
+        if (app && scWas === v && scTop) { const nb = app.querySelector(':scope > .rph-appbody'); if (nb && nb !== scBody && nb.scrollTop !== scTop) nb.scrollTop = scTop; }
+    }
+}
+function renderViewInner(layer, v, app) {
+    if (v === 'lock') renderLock(layer.querySelector('.rph-v-lock'));
+    else if (v === 'home') renderHome(layer.querySelector('.rph-v-home'));
+    else if (v === 'messages') { if (app.querySelector('.rph-apphead.contacts')) { parkRoster(); app.innerHTML = ''; } renderMessagesApp(app); }
+    else if (v === 'contacts') renderContactsApp(app);
+    else if (v === 'call') renderCall(layer.querySelector('.rph-v-call'));
+    else if (v === 'shop') { if (app.querySelector('.rph-apphead.contacts')) { parkRoster(); app.innerHTML = ''; } renderShopApp(app); }
+    else if (v === 'mail') { if (app.querySelector('.rph-apphead.contacts')) { parkRoster(); app.innerHTML = ''; } renderMailApp(app); }
+    else if (v === 'music') { if (app.querySelector('.rph-apphead.contacts')) { parkRoster(); app.innerHTML = ''; } renderMusicApp(app); }
+    else if (v === 'maps') { if (app.querySelector('.rph-apphead.contacts')) { parkRoster(); app.innerHTML = ''; } renderMapsApp(app); }
+    else if (v === 'calendar') { if (app.querySelector('.rph-apphead.contacts')) { parkRoster(); app.innerHTML = ''; } if (calNews().length) { settings.reminders.forEach(r => { delete r.unseen; }); Object.values(settings.birthdays).forEach(b => { if (b) delete b.unseen; }); saveSettings(); } renderCalendarApp(app); }
+    else if (v === 'gallery') { if (app.querySelector('.rph-apphead.contacts')) { parkRoster(); app.innerHTML = ''; } renderGalleryApp(app); }
+    else if (v === 'calls') { if (app.querySelector('.rph-apphead.contacts')) { parkRoster(); app.innerHTML = ''; } if (settings.callsUnseen) { settings.callsUnseen = 0; saveSettings(); } renderCallsApp(app); }
+    else if (v === 'feed') { if (app.querySelector('.rph-apphead.contacts')) { parkRoster(); app.innerHTML = ''; } if (feedStore().unseen) { feedStore().unseen = 0; saveSettings(); renderButton(); } renderFeedApp(app); }
+    if (v !== 'contacts') { parkRoster(); if (app.querySelector('.rph-apphead.contacts') && !['messages', 'feed', 'calls', 'gallery', 'calendar', 'maps', 'mail', 'music', 'shop'].includes(v)) { app.innerHTML = ''; app.dataset.sig = ''; } }
+}
+function onHomeClick(e) {
+    const dot = e.target.closest('.rph-dot');
+    if (dot) { goHomePage(dot.closest('.rph-v-home'), +dot.dataset.page); return; }
+    const el = e.target.closest('[data-act]');
+    if (!el) return;
+    const act = el.dataset.act;
+    if (act === 'open') { phoneLocked = false; openContact(el.dataset.id); }
+    else if (act === 'home') setView('home');
+    else if (act === 'callback') startCall(el.dataset.id, 'out');
+    else if (act === 'suite') openSuite(el.dataset.id);
+    else if (act === 'back-contacts') { if (rosterDetail) { rosterDetail = null; renderRoster(); } else setView('home'); }
+    else if (act === 'newgroup') { rosterDetail = null; rosterEdit = 'new'; setView('contacts'); const n = document.querySelector('#rph-layer .rph-grp-name'); if (n) n.focus(); }
+    else if (act === 'app') {
+        const a = el.dataset.app;
+        if (a === 'wall') { const f = document.getElementById('rph-wall-file'); if (f) f.click(); return; }
+        viewFrom = el;
+        setView(a);
+    }
+}
+function onLockClick(e) {
+    const el = e.target.closest('[data-act]');
+    phoneLocked = false;
+    if (el && el.dataset.act === 'open') { openContact(el.dataset.id); return; }
+    if (el && el.dataset.act === 'app') { setView(el.dataset.app); return; }
+    if (el && el.dataset.act === 'suite') { openSuite(el.dataset.id); return; }
+    setView('home');
+}
+
+/* ============================================================
+   FEED — «Лента» (2.1.0). The people on the phone post about their
+   own day and comment on each other's posts; the player can like and
+   comment, and the author answers. One request makes a whole batch
+   (posts with their comments); a comment of the player's is one more.
+   Off until switched on. Batches come only while the phone is out,
+   not more often than set, not more per day than set, never in the
+   quiet hours. Nothing of it goes into the main chat.
+   ============================================================ */
+const FEED_PROMPT = `You write the social-media feed of a story world, as seen on {{user}}'s phone. The people below post on their own accounts: short posts about their day — what they are doing, thinking or seeing right now. A post is addressed to {{user}} only when that truly fits.
+Rules:
+- Each post is in its author's own voice, personality and situation, true to their card and to what has happened in the story.
+- People comment on each other's posts the way they really would: friends tease, rivals needle, someone shy only likes. Not everyone comments; a post may have no comments.
+- Life goes on without {{user}}: plans, small news, rumours, jokes, a photo of where they are. Never invent big plot events; never decide anything for {{user}}.
+- A post may carry a photo: describe it in one short line in "photo", or leave it empty.
+- "likes" lists who liked the post — only people from the list; a shy person may like without commenting.
+- When KNOWN TIES are given, let at least one comment or like follow them: a rival needles, a crush likes at once, friends tease.
+- Write in {{lang}}.
+Output strictly JSON: {"posts":[{"author":"","text":"","photo":"","likes":[""],"comments":[{"author":"","text":""}]}]}
+Write {{n}} post(s).`;
+const FEED_REPLY_PROMPT = `{{user}} commented on a post in the story's social feed. Write the replies that would really follow: the post's author answers {{user}} in their own voice; others may join in only if they have a reason. Short, like real comments. Write in {{lang}}.
+Output strictly JSON: {"comments":[{"author":"","text":""}]}`;
+const FEED_MAX = 60;
+function feedStore() {
+    let f = settings.feed;
+    if (!f || typeof f !== 'object' || Array.isArray(f)) f = settings.feed = {};
+    if (!Array.isArray(f.posts)) f.posts = [];
+    f.posts = f.posts.filter(x => x && typeof x === 'object' && typeof x.author === 'string' && typeof x.text === 'string').slice(-FEED_MAX);
+    f.posts.forEach(x => { if (!Array.isArray(x.likes)) x.likes = []; x.likes = x.likes.filter(l => typeof l === 'string').slice(0, 8); if (!Array.isArray(x.comments)) x.comments = []; x.comments = x.comments.filter(c => c && typeof c.text === 'string' && typeof c.author === 'string'); });
+    for (const k of ['unseen', 'lastAt', 'todayCount']) if (!Number.isFinite(f[k])) f[k] = 0;
+    if (typeof f.dayStamp !== 'string') f.dayStamp = '';
+    if (f.storySeen && (typeof f.storySeen !== 'object' || Array.isArray(f.storySeen))) delete f.storySeen;
+    else if (f.storySeen) { const live = new Set(f.posts.map(x => x.author)); for (const k of Object.keys(f.storySeen)) if (!live.has(k) || !Number.isFinite(f.storySeen[k])) delete f.storySeen[k]; }
+    return f;
+}
+// who posts: the people on the phone (and the members of its groups), never the player
+// (2.1.2) the ties already worked out in Relationships («Кто им кто») go along with a batch,
+// so rivals needle and crushes like — nothing new is asked to get them
+function feedTies(people) {
+    const out = [];
+    for (let i = 0; i < people.length; i++) for (let j = i + 1; j < people.length; j++) {
+        const r = pairOf(people[i], people[j]);
+        if (r && (r.bond || r.mine || r.theirs)) out.push(`${people[i]} — ${people[j]}${r.bond ? ` (${r.bond})` : ''}: ${people[i]} → ${r.mine || '—'}; ${people[j]} → ${r.theirs || '—'}`);
+        if (out.length >= 10) break;
+    }
+    return out.length ? `[KNOWN TIES]\n${out.join('\n')}` : '';
+}
+// (2.1.4) an invite the player missed may turn up as a post — they did it alone
+function feedMissed() {
+    const out = Object.values(settings.invites || {}).filter(v => v && v.state === 'missed' && Date.now() - (v.missedAt || 0) < 86400000).map(v => `- ${v.from} did "${v.what}" alone — ${name1 || 'the player'} missed it`);
+    return out.length ? `[RECENT MOMENTS — one of them may post about it]\n${out.join('\n')}` : '';
+}
+function feedPeople() {
+    const out = [];
+    for (const id of contactList()) if (!isUnknown(id)) for (const n of contactMembers(id)) if (n && !out.includes(n) && n !== name1) out.push(n);
+    return out.slice(0, 12);
+}
+function feedName(raw, allowed) {
+    const v = String(raw || '').trim().replace(/^@/, '');
+    if (!v) return '';
+    const hit = allowed.find(n => n.toLowerCase() === v.toLowerCase()) || byAlias(v, allowed);
+    return typeof hit === 'string' ? hit : '';
+}
+// a model's JSON, tolerantly: fences, a leading remark, single quotes, trailing commas
+function readJsonLoose(raw) {
+    let s = String(raw || '').replace(/<(think|thinking|reasoning)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, '').trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/, '').trim();
+    const a = s.indexOf('{'), b = s.lastIndexOf('}');
+    if (a < 0 || b <= a) return null;
+    s = s.slice(a, b + 1);
+    try { return JSON.parse(s); } catch (e) { /* try a gentler reading */ }
+    try { return JSON.parse(s.replace(/,\s*([}\]])/g, '$1').replace(/[“”]/g, '"')); } catch (e) { return null; }
+}
+let feedBusy = false;
+let feedReplyOpen = '';   // the post whose comment field is open (one at a time)
+let feedAbort = null;
+// the feed's own request: it does not take the chat's "typing…" or its ✕
+async function feedCall(system, user) {
+    if (!apiKey()) throw new Error('no api key');
+    const ctrl = new AbortController();
+    feedAbort = ctrl;
+    const timer = setTimeout(() => { try { ctrl.abort(new DOMException('The model did not answer in time', 'TimeoutError')); } catch (e) { ctrl.abort(); } }, isLocalEndpoint(apiUrl()) ? 300000 : 120000);
+    try {
+        const res = await fetch(apiUrl() + '/chat/completions', {
+            method: 'POST', signal: ctrl.signal,
+            headers: { 'Authorization': `Bearer ${apiKey().trim()}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ model: apiModel(), messages: [{ role: 'system', content: system }, { role: 'user', content: user }], temperature: settings.temperature, max_tokens: 1600, max_completion_tokens: 1600 })
+        });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const data = await res.json();
+        return String(data.choices?.[0]?.message?.content || '').trim();
+    } finally { clearTimeout(timer); if (feedAbort === ctrl) feedAbort = null; }
+}
+function feedFill(tpl, n) { return tpl.split('{{user}}').join(name1 || 'the player').split('{{lang}}').join(genLang()).split('{{n}}').join(String(n)); }
+function feedRecent(k = 6) {
+    return feedStore().posts.slice(-k).map(x => `${x.author}: ${x.text}${x.photo ? ` [photo: ${x.photo}]` : ''}`).join('\n');
+}
+function worldLine() {
+    const w = storyWorld();
+    if (!w) return '';
+    const bits = [w.place ? `place: ${w.place}` : '', w.date ? `date: ${w.date}` : '', w.time ? `time: ${w.time}` : '', w.weather ? `weather: ${w.weather}` : ''].filter(Boolean);
+    return bits.length ? `[IN THE STORY NOW — ${bits.join(', ')}]` : '';
+}
+async function makeFeedBatch(manual) {
+    if (feedBusy) return 0;
+    const people = feedPeople();
+    if (!people.length) { if (manual) toastr.info(t('feed_nobody')); return 0; }
+    feedBusy = true; renderBubbles();
+    try {
+        const who = shuffled(people).slice(0, 4);
+        const n = settings.feedPosts;
+        const cards = [];
+        for (const nm of who) cards.push(await cardOf(nm));
+        const sys = `${feedFill(FEED_PROMPT, n)}\n\nPEOPLE WHO POST (write only as these):\n${cards.join('\n\n')}`;
+        const usr = [timeContext(0), worldLine(), diaryBlock(who, null, true), mainChatContext(who, settings.mainChatMessages),
+            feedRecent() ? `[RECENT POSTS — do not repeat them]\n${feedRecent()}` : '', feedTies(people), feedMissed()].filter(Boolean).join('\n\n');
+        const raw = await feedCall(sys, usr);
+        const data = readJsonLoose(raw);
+        const list = data && Array.isArray(data.posts) ? data.posts : [];
+        const f = feedStore();
+        const now = Date.now();
+        let added = 0;
+        for (const x of list.slice(0, 3)) {
+            const author = feedName(x && x.author, who.concat(people));
+            const text = cleanLine(x && x.text, 400);
+            if (!author || !text) continue;
+            const post = { id: now.toString(36) + Math.random().toString(36).slice(2, 7), author, text, photo: cleanLine(x.photo, 200) || '', ts: now + added, liked: false, comments: [] };
+            // (2.1.2) who liked it — known people only, never the author, each once
+            post.likes = (Array.isArray(x.likes) ? x.likes : []).map(l => feedName(l, people)).filter((l, i, a) => l && l !== author && a.indexOf(l) === i).slice(0, 8);
+            for (const c of (Array.isArray(x.comments) ? x.comments : []).slice(0, 4)) {
+                const ca = feedName(c && c.author, people);
+                const ct = cleanLine(c && c.text, 240);
+                // (2.1.1) the comments of a new post come in one by one over the next hour, as on
+                // a real feed — the same answer, nothing more is asked of the model
+                if (ca && ct && ca !== author || (ca && ct && post.comments.length)) { const k = post.comments.length; post.comments.push({ who: 'char', author: ca, text: ct, ts: now + added, at: now + Math.round((2 + k * 9 + Math.random() * (6 + k * 8)) * 60000) }); }
+            }
+            f.posts.push(post); added++;
+            if (post.photo && imgCfg().enabled && imgCfg().auto && imgReady()) setTimeout(() => drawFeedPhoto(post.id), 0);
+        }
+        if (f.posts.length > FEED_MAX) { const gone = f.posts.splice(0, f.posts.length - FEED_MAX); dropImages(gone.map(x => x.imgKey).filter(Boolean)); }
+        if (!added) { console.warn('[Phone] feed: nothing readable in the answer —', raw.slice(0, 400)); if (manual) toastr.warning(t('feed_bad')); return 0; }
+        const viewing = isPhoneSkin() && settings.phoneView === 'feed' && !phoneLocked && !phoneTucked();
+        if (!viewing) f.unseen = (f.unseen || 0) + added;
+        saveSettings();
+        const first = f.posts[f.posts.length - added];
+        if (!viewing) notify(first.author, t('feed_note', { name: first.author }) + ' ' + first.text, null);
+        renderButton();
+        return added;
+    } catch (e) {
+        if (manual) toastr.warning(e && e.name === 'TimeoutError' ? t('timeout') : t('err'));
+        console.warn('[Phone] feed failed', e);
+        return 0;
+    } finally { feedBusy = false; renderBubbles(); }
+}
+const cmtShown = c => !c.at || c.at <= Date.now();
+// comments whose time has come: a badge on the Feed while it is not open
+function feedArrivals() {
+    const f = feedStore(); let n = 0;
+    for (const x of f.posts) for (const c of x.comments) if (c.at && !c.told && c.at <= Date.now()) { c.told = 1; n++; }
+    if (!n) return;
+    const viewing = isPhoneSkin() && settings.phoneView === 'feed' && !phoneLocked && !phoneTucked();
+    if (!viewing) f.unseen = (f.unseen || 0) + n;
+    saveSettings(); renderButton(); renderBubbles();
+}
+function feedTick() {
+    if (settings.enabled) feedArrivals();
+    if (!settings.enabled || !settings.feedOn || !apiKey() || feedBusy || phoneTucked()) return;
+    const hour = new Date().getHours(), qf = settings.quietFrom, qt = settings.quietTo;
+    if (qf !== qt && (qf < qt ? (hour >= qf && hour < qt) : (hour >= qf || hour < qt))) return;
+    const f = feedStore();
+    const day = new Date().toDateString();
+    if (f.dayStamp !== day) { f.dayStamp = day; f.todayCount = 0; }
+    if (f.todayCount >= settings.feedPerDay) return;
+    if (Date.now() - (f.lastAt || 0) < settings.feedEvery * 60000) return;
+    f.lastAt = Date.now(); f.todayCount++;
+    saveSettings();
+    makeFeedBatch(false);
+}
+async function feedComment(postId, text) {
+    const f = feedStore();
+    const post = f.posts.find(x => x.id === postId);
+    const clean = String(text || '').trim().slice(0, 300);
+    if (!post || !clean) return;
+    post.comments.push({ who: 'user', author: name1 || 'You', text: clean, ts: Date.now() });
+    saveSettings(); renderBubbles();
+    if (!apiKey()) { toastr.warning(t('nokey')); return; }
+    post.waiting = true; renderBubbles();
+    try {
+        const people = feedPeople();
+        const involved = [post.author, ...post.comments.filter(c => c.who !== 'user' && cmtShown(c)).map(c => c.author)].filter((n, i, a) => n && a.indexOf(n) === i).slice(0, 4);
+        const cards = [];
+        for (const nm of involved) cards.push(await cardOf(nm));
+        const sys = `${feedFill(FEED_REPLY_PROMPT, 1)}\n\nPEOPLE (write only as these):\n${cards.join('\n\n')}`;
+        const usr = [timeContext(0), worldLine(), diaryBlock(involved, null, true),
+            `[THE POST]\n${post.author}: ${post.text}${post.photo ? ` [photo: ${post.photo}]` : ''}`,
+            `[COMMENTS]\n${post.comments.filter(cmtShown).map(c => `${c.who === 'user' ? (name1 || 'You') : c.author}: ${c.text}`).join('\n')}`].filter(Boolean).join('\n\n');
+        const data = readJsonLoose(await feedCall(sys, usr));
+        const live = feedStore().posts.find(x => x.id === postId);
+        if (!live) return;
+        let k = 0;
+        for (const c of (data && Array.isArray(data.comments) ? data.comments : []).slice(0, 3)) {
+            const ca = feedName(c && c.author, involved.concat(people));
+            const ct = cleanLine(c && c.text, 240);
+            if (ca && ct) { live.comments.push({ who: 'char', author: ca, text: ct, ts: Date.now() + k++ }); }
+        }
+        if (!k) toastr.info(t('feed_bad'));
+        saveSettings();
+    } catch (e) {
+        toastr.warning(e && e.name === 'TimeoutError' ? t('timeout') : t('err'));
+        console.warn('[Phone] feed reply failed', e);
+    } finally { const live = feedStore().posts.find(x => x.id === postId); if (live) delete live.waiting; renderBubbles(); }
+}
+// a post's photo, drawn with the phone's own photo engine (one at a time)
+const feedDrawing = new Set();
+async function drawFeedPhoto(postId) {
+    const post = feedStore().posts.find(x => x.id === postId);
+    if (!post || !post.photo || feedDrawing.has(postId) || !imgReady()) return;
+    feedDrawing.add(postId); renderBubbles();
+    try {
+        let ref = null;
+        try { ref = await referenceFor(post.author); } catch (e) { ref = null; }
+        const data = await drawWithRetry(photoPrompt({ name: post.author, text: `[photo: ${post.photo}]` }), (a, b) => toastr.info(t('img_retrying', { a, b })), ref, lensExtras(post.author));
+        const key = newImgKey();
+        const live = feedStore().posts.find(x => x.id === postId);
+        if (live && await putImage(key, data)) { if (live.imgKey) dropImages([live.imgKey]); live.imgKey = key; saveSettings(); }
+    } catch (e) { toastr.warning(drawErrText(e)); console.warn('[Phone] feed photo failed', e); }
+    finally { feedDrawing.delete(postId); renderBubbles(); }
+}
+function likedBy(x) {
+    const l = (x.likes || []).slice();
+    if (!l.length) return '';
+    const first = x.liked ? t('feed_you') : l[0], more = l.length - (x.liked ? 0 : 1);
+    return `<div class="rph-fd-liked"><span class="rph-fd-stack" aria-hidden="true">${l.slice(0, 3).map(avatarHtml).join('')}</span><small>${escapeHtml(more > 0 ? t('feed_liked_more', { name: first, n: more }) : t('feed_liked_one', { name: first }))}</small></div>`;
+}
+function feedPostHtml(x) {
+    const cm = x.comments.filter(cmtShown);
+    const justNow = c => c.at && Date.now() - c.at < 70000;
+    const imgOn = imgReady() && !!imgCfg().enabled;
+    const photo = x.photo ? `<div class="rph-fd-photo">${x.imgKey ? imgTag(x.imgKey) : `<span class="rph-fd-ph"><i class="fa-solid fa-camera" aria-hidden="true"></i><small>${escapeHtml(x.photo)}</small></span>${imgOn ? `<button type="button" class="rph-fd-draw" data-fd="draw" data-id="${escapeHtml(x.id)}"${feedDrawing.has(x.id) ? ' disabled' : ''}>${escapeHtml(t(feedDrawing.has(x.id) ? 'feed_drawing' : 'feed_draw'))}</button>` : ''}`}</div>` : '';
+    return `<article class="rph-fd-post" data-id="${escapeHtml(x.id)}">
+        <header class="rph-fd-head">${avatarHtml(x.author)}<span class="rph-fd-who"><b>${escapeHtml(x.author)}</b><small>${escapeHtml(whenShort(x.ts))}</small></span><button type="button" class="rph-fd-del${feedSure === 'p:' + x.id ? ' sure' : ''}" data-fd="del" data-id="${escapeHtml(x.id)}" aria-label="${escapeHtml(t(feedSure === 'p:' + x.id ? 'msg_del_sure' : 'feed_del'))}" title="${escapeHtml(t(feedSure === 'p:' + x.id ? 'msg_del_sure' : 'feed_del'))}"><i class="fa-solid fa-trash-can" aria-hidden="true"></i></button></header>
+        <p class="rph-fd-text">${escapeHtml(x.text)}</p>
+        ${photo}
+        <div class="rph-fd-acts">
+            <button type="button" class="rph-fd-like${x.liked ? ' on' : ''}" data-fd="like" data-id="${escapeHtml(x.id)}" aria-pressed="${!!x.liked}" aria-label="${escapeHtml(t('feed_like'))}"><i class="fa-solid fa-heart" aria-hidden="true"></i><span class="rph-fd-n">${(x.likes || []).length + (x.liked ? 1 : 0)}</span></button>
+            <button type="button" class="rph-fd-cbtn${feedReplyOpen === x.id ? ' on' : ''}" data-fd="reply" data-id="${escapeHtml(x.id)}" aria-expanded="${feedReplyOpen === x.id}" aria-label="${escapeHtml(t('feed_comment_ph'))}"><i class="fa-solid fa-comment" aria-hidden="true"></i><span class="rph-fd-n">${cm.length}</span></button>
+        </div>
+        ${likedBy(x)}
+        ${cm.length || x.waiting ? `<ul class="rph-fd-cmts">${cm.map(c => { const k = x.comments.indexOf(c), sure = feedSure === 'c:' + x.id + ':' + k; return `<li class="${c.who === 'user' ? 'mine' : ''}${justNow(c) ? ' fresh' : ''}">${c.who === 'user' ? '' : avatarHtml(c.author)}<span><b>${escapeHtml(c.who === 'user' ? t('pv_you') : c.author)}</b> ${escapeHtml(c.text)}</span><button type="button" class="rph-fd-cdel${sure ? ' sure' : ''}" data-fd="cdel" data-id="${escapeHtml(x.id)}" data-k="${k}" aria-label="${escapeHtml(t(sure ? 'msg_del_sure' : 'feed_cdel'))}" title="${escapeHtml(t(sure ? 'msg_del_sure' : 'feed_cdel'))}"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button></li>`; }).join('')}${x.waiting ? `<li class="rph-fd-typing">•••</li>` : ''}</ul>` : ''}
+        <div class="rph-fd-reply"${feedReplyOpen === x.id || x.waiting ? '' : ' hidden'}><input type="text" class="rph-fd-in" maxlength="300" placeholder="${escapeHtml(t('feed_comment_ph'))}" aria-label="${escapeHtml(t('feed_comment_ph'))}"${x.waiting ? ' disabled' : ''}><button type="button" class="rph-fd-send" data-fd="send" data-id="${escapeHtml(x.id)}" aria-label="${escapeHtml(t('feed_send'))}"${x.waiting ? ' disabled' : ''}><i class="fa-solid fa-paper-plane" aria-hidden="true"></i></button></div>
+    </article>`;
+}
+// (2.1.1) a row of faces over the feed: who posted in the last day; a ring until you look.
+// A tap brings their newest post into view. Built from the posts already there — no request.
+function feedStories(f) {
+    const day = Date.now() - 86400000, seen = f.storySeen && typeof f.storySeen === 'object' ? f.storySeen : {};
+    const latest = new Map();
+    for (const x of f.posts) if (x.ts >= day) latest.set(x.author, x);
+    if (latest.size < 1) return '';
+    const row = [...latest.values()].sort((a, b) => b.ts - a.ts).slice(0, 10);
+    return `<div class="rph-fd-stories" role="list" aria-label="${escapeHtml(t('feed_stories'))}">${row.map(x => {
+        const fresh = !(Object.prototype.hasOwnProperty.call(seen, x.author) && seen[x.author] >= x.ts);
+        return `<button type="button" role="listitem" class="rph-fd-story${fresh ? ' fresh' : ''}" data-fd="story" data-id="${escapeHtml(x.id)}" aria-label="${escapeHtml(x.author + (fresh ? ' · ' + t('feed_story_new') : ''))}">${avatarHtml(x.author)}<small>${escapeHtml(String(x.author).split(/\s+/)[0])}</small></button>`;
+    }).join('')}</div>`;
+}
+function renderFeedApp(box) {
+    const f = feedStore();
+    const posts = f.posts.slice().reverse();
+    const head = `<div class="rph-apphead feed"><button type="button" class="rph-tbtn" data-act="home" aria-label="${escapeHtml(t('lk_home'))}" data-focus><i class="fa-solid fa-chevron-left" aria-hidden="true"></i></button><b>${escapeHtml(t('app_feed'))}</b>
+        <button type="button" class="rph-tbtn" data-fd="more" aria-label="${escapeHtml(t('feed_more'))}" title="${escapeHtml(t('feed_more'))}"${!settings.feedOn || feedBusy ? ' disabled' : ''}><i class="fa-solid ${feedBusy ? 'fa-spinner fa-spin' : 'fa-rotate-right'}" aria-hidden="true"></i></button></div>`;
+    const off = !settings.feedOn ? `<div class="rph-fd-off"><i class="fa-solid fa-newspaper" aria-hidden="true"></i><b>${escapeHtml(t('feed_off_h'))}</b><p>${escapeHtml(t('feed_off_p'))}</p><button type="button" class="rph-gbtn main" data-fd="on">${escapeHtml(t('feed_turn_on'))}</button></div>` : '';
+    const empty = settings.feedOn && !posts.length ? `<div class="rph-fd-off"><i class="fa-solid fa-newspaper" aria-hidden="true"></i><p>${escapeHtml(t(feedBusy ? 'feed_loading' : 'feed_empty'))}</p></div>` : '';
+    const items = posts.map(x => [x.id, feedPostHtml(x)]);
+    const clearAll = posts.length ? `<button type="button" class="rph-fd-clear${feedSure === 'all' ? ' sure' : ''}" data-fd="clear">${escapeHtml(t(feedSure === 'all' ? 'feed_clear_sure' : 'feed_clear'))}</button>` : '';
+    const html = head + `<div class="rph-appbody rph-fd">${off}${empty}${settings.feedOn ? feedStories(f) : ''}${items.map(x => x[1]).join('')}${clearAll}</div>`;
+    if (box.dataset.sig === html) return;
+    // the comment being typed survives a redraw
+    const typing = box.querySelector('.rph-fd-in:focus');
+    const keepId = typing && typing.closest('.rph-fd-post')?.dataset.id, keepVal = typing && typing.value;
+    const sc = box.querySelector('.rph-appbody');
+    // (2.1.1) a like or opening the comments re-drew the whole feed, every card replaying
+    // its entrance — the feed twitched. Same head and no notice: only the cards that
+    // changed are swapped (without the entrance), new ones come in, gone ones leave.
+    const frameSig = head + off + empty + (settings.feedOn ? feedStories(f) : '') + clearAll;
+    if (sc && box.dataset.frame === frameSig) {
+        const old = new Map([...sc.querySelectorAll(':scope > .rph-fd-post')].map(el => [el.dataset.id, el]));
+        let prev = null;
+        for (const [id, h] of items) {
+            let el = old.get(id);
+            if (el) old.delete(id);
+            if (!el || el.dataset.sig !== h) {
+                const tpl = document.createElement('template'); tpl.innerHTML = h.trim();
+                const fresh = tpl.content.firstElementChild; fresh.dataset.sig = h;
+                if (el) { fresh.classList.add('still'); el.replaceWith(fresh); }
+                el = fresh;
+            }
+            // the cards go after the stories row (and before «Clear the feed»)
+            const lead = sc.querySelector(':scope > .rph-fd-stories');
+            const want = prev ? prev.nextElementSibling : (lead ? lead.nextElementSibling : sc.firstElementChild);
+            if (want !== el) sc.insertBefore(el, want);
+            prev = el;
+        }
+        old.forEach(el => el.remove());
+    } else {
+        const top = sc ? sc.scrollTop : 0;
+        box.innerHTML = html; box.dataset.frame = frameSig;
+        box.querySelectorAll('.rph-fd-post').forEach((el, k) => { if (items[k]) el.dataset.sig = items[k][1]; });
+        const nsc = box.querySelector('.rph-appbody'); if (nsc) nsc.scrollTop = top;
+    }
+    box.dataset.sig = html;
+    if (keepId) { const inp = box.querySelector(`.rph-fd-post[data-id="${CSS.escape(keepId)}"] .rph-fd-in`); if (inp && inp !== document.activeElement) { inp.value = keepVal; inp.focus(); } }
+    box.querySelectorAll('img.rph-img[data-key]:not([src])').forEach(async im => { const u = await imageUrl(im.dataset.key); if (u && im.isConnected) im.src = u; });
+}
+let feedSure = '', feedSureT = 0;   // what waits for its second tap to be deleted
+function armFeedSure(tag) { feedSure = tag; clearTimeout(feedSureT); feedSureT = setTimeout(() => { feedSure = ''; renderBubbles(); }, 3000); renderBubbles(); }
+function onFeedClick(e) {
+    const el = e.target.closest('[data-fd]');
+    if (!el || el.disabled) return;
+    const id = el.dataset.id, act = el.dataset.fd;
+    if (act === 'on') { settings.feedOn = true; saveSettings(); $('#rph-feed-on').prop('checked', true); makeFeedBatch(true); return; }
+    if (act === 'more') { makeFeedBatch(true); return; }
+    // (2.1.3) the player cleans the feed: a post, a comment, or everything — each asks for a second tap
+    if (act === 'clear') {
+        if (feedSure !== 'all') { armFeedSure('all'); return; }
+        const f = feedStore(); dropImages(f.posts.map(x => x.imgKey).filter(Boolean));
+        f.posts = []; f.unseen = 0; f.storySeen = {}; feedSure = ''; feedReplyOpen = '';
+        saveSettings(); renderButton(); renderBubbles(); toastr.info(t('feed_cleared')); return;
+    }
+    const post = feedStore().posts.find(x => x.id === id);
+    if (!post) return;
+    if (act === 'story') {
+        const f = feedStore();
+        if (!f.storySeen || typeof f.storySeen !== 'object' || Array.isArray(f.storySeen)) f.storySeen = {};
+        if (!['__proto__', 'constructor', 'prototype'].includes(post.author)) f.storySeen[post.author] = post.ts;
+        saveSettings(); renderBubbles();
+        const card = document.querySelector(`#rph-layer .rph-fd-post[data-id="${CSS.escape(id)}"]`);
+        if (card) { card.scrollIntoView({ block: 'start', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' }); card.classList.remove('flash'); void card.offsetWidth; card.classList.add('flash'); }
+        return;
+    }
+    if (act === 'del') {
+        if (feedSure !== 'p:' + id) { armFeedSure('p:' + id); return; }
+        const f = feedStore(); if (post.imgKey) dropImages([post.imgKey]);
+        f.posts = f.posts.filter(x => x.id !== id); feedSure = ''; if (feedReplyOpen === id) feedReplyOpen = '';
+        saveSettings(); renderBubbles(); return;
+    }
+    if (act === 'cdel') {
+        const k = Number(el.dataset.k), tag = 'c:' + id + ':' + k;
+        if (!Number.isInteger(k) || !post.comments[k]) return;
+        if (feedSure !== tag) { armFeedSure(tag); return; }
+        post.comments.splice(k, 1); feedSure = ''; saveSettings(); renderBubbles(); return;
+    }
+    if (act === 'like') { post.liked = !post.liked; saveSettings(); renderBubbles(); }
+    else if (act === 'reply') { feedReplyOpen = feedReplyOpen === id ? '' : id; renderBubbles(); const inp = document.querySelector(`#rph-layer .rph-fd-post[data-id="${CSS.escape(id)}"] .rph-fd-in`); if (inp && feedReplyOpen) inp.focus(); }
+    else if (act === 'draw') drawFeedPhoto(id);
+    else if (act === 'send') { const inp = el.closest('.rph-fd-reply').querySelector('.rph-fd-in'); const v = inp.value; inp.value = ''; feedComment(id, v); }
+}
+
+/* ============================================================
+   CALLS (2.1.0). Sometimes, instead of writing first, someone calls:
+   a ringing screen with their face — pick up, and the talk goes as
+   spoken lines (read out by Tavern's TTS when it is set up); let it
+   ring 20 s, and it is a missed call (and, if enabled, a short voice
+   message). The player can call too, from a contact's card or the
+   «Phone» app, which keeps the call log. The talk stays in the
+   conversation, so they remember it. Phone skins only; no groups.
+   ============================================================ */
+const CALL_LINE = `[This is a PHONE CALL, not texting: {{user}} hears your voice. Speak the way people talk out loud — short spoken lines, pauses, laughter, breathing, interruptions; no emojis, no photos, no "[sent a photo]". Write each spoken line as "Name: words"; put sounds and pauses in parentheses, e.g. "Name: (a short laugh) words". Never copy this example.]`;
+const VOICEMAIL_LINE = `[{{user}} did not pick up your call. Leave one short voice message, the way you would really say it.]`;
+const RING_MS = 20000;
+let call = null;          // { id, dir, phase: 'ringing'|'active', started, reason, ringT, ringSound }
+function callFill(x) { return x.split('{{user}}').join(name1 || 'the player'); }
+function callLog(entry) { settings.calls.push(entry); if (settings.calls.length > 100) settings.calls.splice(0, settings.calls.length - 100); }
+function ringTone() {
+    if (!settings.sound) return;
+    const ac = actx(); if (!ac) return;
+    const t0 = ac.currentTime + 0.02;
+    for (let k = 0; k < 2; k++) {
+        const o = ac.createOscillator(), g = ac.createGain();
+        o.type = 'sine'; o.frequency.value = k ? 660 : 523;
+        g.gain.setValueAtTime(0.0001, t0 + k * .42); g.gain.exponentialRampToValueAtTime(0.22, t0 + k * .42 + .03); g.gain.exponentialRampToValueAtTime(0.0001, t0 + k * .42 + .38);
+        o.connect(g); g.connect(ac.destination); o.start(t0 + k * .42); o.stop(t0 + k * .42 + .4);
+    }
+}
+function startCall(id, dir, reason) {
+    if (call || isGroup(id) || isUnknown(id) || settings.blocked[id] || !isPhoneSkin()) return false;
+    call = { id, dir, phase: 'ringing', started: 0, reason: reason || '' };
+    settings.enabled = true;
+    if (settings.phoneMin) settings.phoneMin = false;   // a call comes to the front, like on a real phone
+    phoneLocked = false;
+    if (dir === 'in') {
+        const st = stateOf(id);
+        st.lastInitiative = Date.now(); st.todayCount = (st.todayCount || 0) + 1;
+        ringTone(); call.ringSound = setInterval(ringTone, 2400);
+        call.ringT = setTimeout(() => missCall(), RING_MS);
+        notify(id, t('call_incoming'), id);
+    } else {
+        call.ringT = setTimeout(() => answerCall(), 1800 + Math.random() * 1600);   // it rings on their side, then they pick up
+        call.ringSound = setInterval(ringTone, 2400); ringTone();
+    }
+    saveSettings(); renderBubbles(); renderButton();
+    return true;
+}
+function stopRinging() { if (!call) return; clearTimeout(call.ringT); clearInterval(call.ringSound); call.ringT = call.ringSound = null; }
+async function callTalk(rq, extra, isInitiative) {
+    const id = call.id;
+    try {
+        const msgs = await generateReply([id], `\n${callFill(CALL_LINE)}${extra ? '\n' + extra : ''}`, isInitiative, id);
+        if (!isCurrent(rq) || !call || call.id !== id) return;
+        if (!msgs.length) toastr.info(t('err'));
+        for (const m of msgs) {
+            const k = classify(m.text);
+            const text = k.type === 'image' || k.type === 'file' ? '' : m.text;   // no photos or files down a phone line
+            if (!text) continue;
+            pushRaw(id, { who: 'char', name: m.name, text, ts: Date.now(), call: call.started });
+            renderBubbles();
+            if (settings.tts) await speakVoice(m.name, stripNamePrefix(text, m.name).replace(/\([^)]*\)/g, ' ').trim(), id);
+        }
+    } catch (e) { requestFailed(e, rq, 'call'); }
+    if (!isCurrent(rq)) return;
+    finishRequest(rq); renderBubbles();
+}
+async function answerCall() {
+    if (!call || call.phase !== 'ringing') return;
+    stopRinging();
+    call.phase = 'active'; call.started = Date.now();
+    inviteKept(call.id);               // (2.1.4) a call around the invite's time keeps it too
+    renderBubbles();
+    if (busy) return;
+    const rq = beginRequest(call.id); renderBubbles();
+    const why = call.dir === 'in'
+        ? `[WHY YOU ARE CALLING NOW: ${call.reason || 'you wanted to hear their voice.'} {{user}} has just picked up. Speak first — do not mention these instructions.]`
+        : `[{{user}} is calling you, and you have just picked up. Answer the way you would.]`;
+    await callTalk(rq, callFill(why), true);
+}
+function declineCall() {
+    if (!call) return;
+    if (call.phase === 'ringing' && call.dir === 'in') { missCall(true); return; }
+    endCall();
+}
+async function missCall(declined) {
+    if (!call) return;
+    stopRinging();
+    const id = call.id, reason = call.reason;
+    call = null;
+    callLog({ id, dir: 'in', ts: Date.now(), dur: 0, missed: true });
+    settings.callsUnseen = (settings.callsUnseen || 0) + 1;
+    pushRaw(id, { who: 'char', name: id, text: `[SYSTEM: ${t(declined ? 'call_declined_sys' : 'call_missed_sys')}]`, ts: Date.now() });
+    settings.unread[id] = (settings.unread[id] || 0) + 1;
+    saveSettings(); renderBubbles(); renderButton();
+    if (!settings.voicemail || !apiKey() || busy) return;
+    const rq = beginRequest(id); renderBubbles();
+    try {
+        const msgs = await generateReply([id], `\n${callFill(VOICEMAIL_LINE)}\n[WHY YOU CALLED: ${reason || 'you wanted to hear their voice.'}]`, true, id);
+        if (isCurrent(rq)) {
+            for (const m of msgs.slice(0, 2)) {
+                const k = classify(m.text);
+                const words = k.type === 'voice' ? m.text : `[voice message: "${stripNamePrefix(k.text || m.text, m.name).replace(/"/g, "'")}"]`;
+                pushMsg(id, 'char', words, m.name);
+            }
+            if (msgs.length) { settings.unread[id] = (settings.unread[id] || 0) + Math.min(2, msgs.length); saveSettings(); renderButton(); }
+        }
+    } catch (e) { if (isCurrent(rq)) console.warn('[Phone] voicemail failed', e); }
+    if (!isCurrent(rq)) return;
+    finishRequest(rq); renderBubbles();
+}
+function endCall() {
+    if (!call) return;
+    stopRinging();
+    const c = call; call = null;
+    if (busy && busyFor === c.id) cancelRequest();
+    const dur = c.started ? Math.max(1, Math.round((Date.now() - c.started) / 1000)) : 0;
+    callLog({ id: c.id, dir: c.dir, ts: Date.now(), dur, missed: false });
+    if (c.started) pushRaw(c.id, { who: 'char', name: c.id, text: `[SYSTEM: ${t('call_ended_sys', { d: callDur(dur) })}]`, ts: Date.now() });
+    settings.phoneView = 'chat'; settings.current = c.id;
+    saveSettings(); renderBubbles(true); renderButton();
+}
+function callDur(sec) { const m = Math.floor(sec / 60), s = sec % 60; return m + ':' + String(s).padStart(2, '0'); }
+function sayInCall(text) {
+    const clean = String(text || '').trim().slice(0, 600);
+    if (!call || call.phase !== 'active' || !clean || busy) return;
+    pushRaw(call.id, { who: 'user', name: name1 || 'You', text: clean, ts: Date.now(), call: call.started });
+    const rq = beginRequest(call.id); renderBubbles();
+    callTalk(rq, '', false);
+}
+let callTimer = 0;
+function renderCall(box) {
+    if (!call) return;
+    const lines = call.started ? threadOf(call.id).filter(m => m.call === call.started).slice(-6) : [];
+    const ring = call.phase === 'ringing';
+    const status = ring ? t(call.dir === 'in' ? 'call_incoming' : 'call_calling') : callDur(Math.round((Date.now() - call.started) / 1000));
+    const html = `<div class="rph-call${ring ? ' ringing' : ''}">
+        <div class="rph-call-who"><span class="rph-call-ava">${avatarHtml(call.id)}</span><b>${escapeHtml(call.id)}</b><small class="rph-call-st" aria-live="polite">${escapeHtml(status)}</small></div>
+        <div class="rph-call-lines">${lines.map(m => `<p class="${m.who === 'user' ? 'mine' : ''}">${escapeHtml(m.who === 'user' ? m.text : stripNamePrefix(m.text, m.name))}</p>`).join('')}${!ring && busy && busyFor === call.id ? '<p class="rph-call-dots">•••</p>' : ''}</div>
+        ${ring ? '' : `<div class="rph-call-say"><input type="text" class="rph-call-in" maxlength="600" placeholder="${escapeHtml(t('call_say_ph'))}" aria-label="${escapeHtml(t('call_say_ph'))}"><button type="button" class="rph-call-send" data-call="say" aria-label="${escapeHtml(t('feed_send'))}"><i class="fa-solid fa-paper-plane" aria-hidden="true"></i></button></div>`}
+        <div class="rph-call-btns">
+            ${ring && call.dir === 'in' ? `<button type="button" class="rph-call-b no" data-call="decline" aria-label="${escapeHtml(t('call_decline'))}"><i class="fa-solid fa-phone-slash" aria-hidden="true"></i><span>${escapeHtml(t('call_decline'))}</span></button><button type="button" class="rph-call-b yes" data-call="answer" aria-label="${escapeHtml(t('call_answer'))}" data-focus><i class="fa-solid fa-phone" aria-hidden="true"></i><span>${escapeHtml(t('call_answer'))}</span></button>`
+            : `<button type="button" class="rph-call-b no" data-call="end" aria-label="${escapeHtml(t('call_end'))}" data-focus><i class="fa-solid fa-phone-slash" aria-hidden="true"></i><span>${escapeHtml(t('call_end'))}</span></button>`}
+        </div>
+    </div>`;
+    if (box.dataset.sig === html) return;
+    const typing = box.querySelector('.rph-call-in'); const val = typing ? typing.value : ''; const had = typing && document.activeElement === typing;
+    box.innerHTML = html; box.dataset.sig = html;
+    const inp = box.querySelector('.rph-call-in'); if (inp) { inp.value = val; if (had) inp.focus(); }
+    const ls = box.querySelector('.rph-call-lines'); if (ls) ls.scrollTop = ls.scrollHeight;
+    clearInterval(callTimer);
+    if (call.phase === 'active') callTimer = setInterval(() => { if (!call || call.phase !== 'active') { clearInterval(callTimer); return; } const st = box.querySelector('.rph-call-st'); if (st) st.textContent = callDur(Math.round((Date.now() - call.started) / 1000)); }, 1000);
+}
+function onCallClick(e) {
+    const el = e.target.closest('[data-call]');
+    if (!el) return;
+    const a = el.dataset.call;
+    if (a === 'answer') answerCall();
+    else if (a === 'decline') declineCall();
+    else if (a === 'end') endCall();
+    else if (a === 'say') { const inp = el.closest('.rph-call-say').querySelector('.rph-call-in'); const v = inp.value; inp.value = ''; sayInCall(v); }
+}
+// «Phone» app: the call log, a tap calls back
+function renderCallsApp(box) {
+    const list = settings.calls.slice().reverse().slice(0, 60);
+    const html = `<div class="rph-apphead calls"><button type="button" class="rph-tbtn" data-act="home" aria-label="${escapeHtml(t('lk_home'))}" data-focus><i class="fa-solid fa-chevron-left" aria-hidden="true"></i></button><b>${escapeHtml(t('app_calls'))}</b><span class="rph-tbtn-gap"></span></div>
+        <div class="rph-appbody">${list.length ? list.map(c => `<div class="rph-conv rph-callrow${c.missed ? ' missed' : ''}" role="button" tabindex="0" data-act="callback" data-id="${escapeHtml(c.id)}" aria-label="${escapeHtml(t('call_back', { name: c.id }))}">
+            ${avatarHtml(c.id)}
+            <span class="rph-conv-who"><b>${escapeHtml(c.id)}</b><small><i class="fa-solid ${c.missed ? 'fa-phone-slash' : c.dir === 'in' ? 'fa-phone-volume' : 'fa-phone'}" aria-hidden="true"></i> ${escapeHtml(c.missed ? t('call_missed') : t(c.dir === 'in' ? 'call_in' : 'call_out') + (c.dur ? ' · ' + callDur(c.dur) : ''))}</small></span>
+            <span class="rph-conv-meta"><small>${escapeHtml(whenShort(c.ts))}</small><i class="fa-solid fa-phone rph-callback-ic" aria-hidden="true"></i></span>
+        </div>`).join('') : `<div class="rph-fd-off"><i class="fa-solid fa-phone" aria-hidden="true"></i><p>${escapeHtml(t('calls_empty'))}</p></div>`}</div>`;
+    if (box.dataset.sig !== html) { box.innerHTML = html; box.dataset.sig = html; }
+}
+
+/* ============================================================
+   NOTIFICATIONS FROM THE SUITE (2.1.0). The other extensions already
+   show a sign on their own button when something new is waiting (a
+   new event, letters, a quest). The phone reads those signs — and the
+   story's current event — and shows them on the lock screen and the
+   home screen; a tap opens that extension. Nothing is asked of a model,
+   nothing is written to the other extensions.
+   ============================================================ */
+const SUITE_APPS = {
+    'rpg-map-btn': ['Карта', 'Map'], 'rls-btn': ['Живая сцена', 'Living Scene'], 'rpg-quest-toggle-btn': ['Задания', 'Quests'],
+    'rdg-btn': ['Кроличья нора', 'Rabbit Hole'], 'rpg-diary-btn': ['Дневник', 'Diary'], 'rpg-vit-btn': ['Состояние', 'Vitals'],
+    'rpg-eq-btn': ['Экипировка', 'Outfit'], 'rpg-inventory-btn': ['Рюкзак', 'Backpack'], 'rpg-vnd-btn': ['Вендоры', 'Vendors'],
+    'tbe-btn': ['Связи', 'Bonds'], 'codex-btn': ['Книга', 'Codex'], 'rpg-game-btn': ['Игры', 'Games'], 'rpg-hub-btn': ['Меню', 'Menu'],
+};
+function suiteNews() {
+    const out = [];
+    const box = document.getElementById('rpg-buttons-container');
+    if (box) for (const k of box.children) {
+        if (!k.id || k.id === 'rph-btn' || !SUITE_APPS[k.id]) continue;
+        const hot = k.hasAttribute('data-rpgs-hot') || [...k.querySelectorAll('[class*="badge"]')].some(x => !x.hidden && getComputedStyle(x).display !== 'none' && +getComputedStyle(x).opacity > 0.05 && String(x.textContent).trim() !== '0');
+        if (!hot) continue;
+        const ic = (k.querySelector('i')?.className || '').split(/\s+/).filter(c => /^fa-[a-z0-9-]+$/.test(c));
+        out.push({ id: k.id, label: SUITE_APPS[k.id][settings.language === 'en' ? 1 : 0], icon: ic.length ? ic.join(' ') : 'fa-bell' });
+    }
+    const ev = storyEvent();
+    if (ev && ev.title !== settings.eventSeen) out.unshift({ id: 'event', label: t('nt_event'), icon: 'fa-scroll', text: String(ev.title).slice(0, 80) });
+    const um = settings.mail.filter(x => !x.read);
+    if (um.length) out.unshift({ id: 'mail', label: t('app_mail'), icon: 'fa-envelope', text: um[um.length - 1].subject || um[um.length - 1].from });
+    return calNews().concat(out);
+}
+function newsSig(list) { return list.map(x => x.id + (x.text || '')).join('|'); }
+function newsRow(x, inLock) {
+    return `<div class="${inLock ? 'rph-note' : 'rph-conv'} rph-newsrow" role="button" tabindex="0" data-act="suite" data-id="${escapeHtml(x.id)}">
+        <span class="rph-app-ic rph-note-ic"><i class="fa-solid ${escapeHtml(x.icon.replace(/\bfa-solid\b/g, '').trim())}" aria-hidden="true"></i></span>
+        <span class="${inLock ? 'rph-note-body' : 'rph-conv-who'}">${inLock ? `<span class="rph-note-top"><b>${escapeHtml(x.label)}</b></span>` : `<b>${escapeHtml(x.label)}</b>`}<small>${escapeHtml(x.text || t('nt_new'))}</small></span>
+    </div>`;
+}
+function openSuite(id) {
+    if (id === 'cal') { phoneLocked = false; setView('calendar'); return; }   // the phone's own calendar
+    if (id === 'mail') { phoneLocked = false; setView('mail'); return; }
+    if (id === 'event') { const ev = storyEvent(); settings.eventSeen = ev ? ev.title : ''; saveSettings(); id = 'rpg-quest-toggle-btn'; }
+    const btn = document.getElementById(id);
+    phoneLocked = false;
+    settings.phoneMin = true; saveSettings(); renderBubbles(); renderButton();   // the phone steps aside for the other window
+    if (btn) btn.click();
+}
+
+/* ============================================================
+   SECRETS (2.1.0). Block a contact (silent, in «Blocked»), hide a
+   chat (out of every list, reachable from Contacts), and — when
+   switched on — now and then an SMS from an unknown number: a hint
+   tied to the story, a warning, a wrong number or this world's spam.
+   At most one a day; replying is possible, the unknown answers.
+   ============================================================ */
+const UNKNOWN_PROMPT = `Write one text message that {{user}} receives from an unknown number in this story world. It can be a mysterious hint tied to what is happening in the story, a warning, a wrong-number message, or spam typical of this world — pick what fits the setting and the moment. Never reveal who sent it unless the story already makes it obvious; never invent big plot events. Keep it short. Write in {{lang}}.
+Output strictly JSON: {"kind":"hint|warning|wrong|spam","from":"how the number shows, e.g. +7 9•• ••• 41 or Unknown","text":""}`;
+let unknownBusy = false;
+async function makeUnknown(manual) {
+    if (unknownBusy || !apiKey()) return null;
+    unknownBusy = true;
+    try {
+        const people = phonePeople();
+        // (2.1.4) about every second time the same number writes again: what it wrote before goes along
+        const back = Object.keys(settings.unknown).filter(k => { const u = settings.unknown[k]; return u && (u.kind === 'hint' || u.kind === 'warning') && !settings.blocked[k] && (settings.threads[k] || []).length && (settings.threads[k] || []).length < 8; });
+        const again = back.length && Math.random() < 0.5 ? back[Math.floor(Math.random() * back.length)] : '';
+        const before = again ? `[THIS NUMBER WROTE BEFORE — write as the same sender, follow on from it]\n${(settings.threads[again] || []).slice(-4).map(m => `${m.who === 'user' ? (name1 || 'You') : 'Number'}: ${clip(m.text, 200)}`).join('\n')}` : '';
+        const usr = [timeContext(0), worldLine(), diaryBlock(people.slice(0, 3), null, true), mainChatContext(people, settings.mainChatMessages), before].filter(Boolean).join('\n\n') || '[No story context yet.]';
+        const data = readJsonLoose(await feedCall(UNKNOWN_PROMPT.split('{{user}}').join(name1 || 'the player').split('{{lang}}').join(genLang()), usr));
+        const text = cleanLine(data && data.text, 400);
+        if (!text) { if (manual) toastr.warning(t('feed_bad')); return null; }
+        const kind = ['hint', 'warning', 'wrong', 'spam'].includes(data.kind) ? data.kind : 'hint';
+        let from = String(data.from || '').replace(/[<>]/g, '').replace(/\s+/g, ' ').trim().slice(0, 28);
+        if (characters.some(c => c.name === from)) from = '';   // never a known card's name; '' shows as «Unknown» in the phone's language
+        const id = again || (UNKNOWN_PREFIX + Date.now().toString(36) + Math.random().toString(36).slice(2, 6));
+        if (again) from = settings.unknown[again].from;
+        else settings.unknown[id] = { from, kind };
+        // a hint or a warning waits for its answer: one to three days later someone they know brings it up
+        if ((kind === 'hint' || kind === 'warning') && !settings.unknown[id].rumour) settings.unknown[id].rumour = { text, at: Date.now(), payAt: Date.now() + Math.round((1 + Math.random() * 2) * 86400000), verdict: '' };
+        settings.active[id] = true;
+        settings.unknownLast = Date.now();
+        pushRaw(id, { who: 'char', name: from || t('unk_unknown'), text, ts: Date.now() });
+        settings.unread[id] = (settings.unread[id] || 0) + 1;
+        saveSettings(); renderBubbles(); renderButton();
+        notify(from || t('unk_unknown'), text, id);
+        return id;
+    } catch (e) { if (manual) toastr.warning(e && e.name === 'TimeoutError' ? t('timeout') : t('err')); console.warn('[Phone] unknown number failed', e); return null; }
+    finally { unknownBusy = false; }
+}
+function unknownTick() {
+    if (!settings.enabled || !settings.unknownOn || !apiKey() || unknownBusy || !isPhoneSkin()) return;
+    const hour = new Date().getHours(), qf = settings.quietFrom, qt = settings.quietTo;
+    if (qf !== qt && (qf < qt ? (hour >= qf && hour < qt) : (hour >= qf || hour < qt))) return;
+    if (Date.now() - (settings.unknownLast || 0) < 24 * 3600e3) return;
+    if (Math.random() > 1 / 45) return;   // not on the dot: some time after the day has passed
+    makeUnknown(false);
+}
+// (2.1.4, approved) RUMOURS THAT PAY OFF — the hint does not just hang there: when its day comes,
+// someone the player knows brings it up — it came true, it did not, or nobody knows yet.
+const RUMOUR_PROMPT = `Some time ago {{user}} got this message from an unknown number: "{{hint}}". Now one of the people below brings it up in a text to {{user}} — the hint turned out true, false, or is still unclear, as fits the story so far. They write as themselves, short, in their own voice; they do not know who sent the hint. Never invent big plot events. Write in {{lang}}.
+Output strictly JSON: {"from":"a name from the list","verdict":"true|false|unclear","text":""}`;
+let rumourBusy = false;
+function openRumours() { return Object.entries(settings.unknown || {}).filter(([, u]) => u && u.rumour); }
+async function rumourTick(force) {
+    if (!settings.enabled || !apiKey() || rumourBusy || busy || call) return;
+    const hour = new Date().getHours(), qf = settings.quietFrom, qt = settings.quietTo;
+    if (!force && qf !== qt && (qf < qt ? (hour >= qf && hour < qt) : (hour >= qf || hour < qt))) return;
+    const due = openRumours().find(([id, u]) => !u.rumour.verdict && u.rumour.payAt <= Date.now() && !settings.blocked[id]);
+    if (!due) return;
+    const people = phonePeople().filter(n => n !== name1 && !isGroup(n) && !settings.blocked[n] && !settings.muted[n]).slice(0, 4);
+    if (!people.length) return;
+    const [uid, u] = due;
+    rumourBusy = true;
+    try {
+        const cards = []; for (const n of people) cards.push(await cardOf(n));
+        const sys = `${RUMOUR_PROMPT.split('{{user}}').join(name1 || 'the player').split('{{hint}}').join(u.rumour.text.replace(/"/g, "'")).split('{{lang}}').join(genLang())}\n\nPEOPLE (write only as one of these):\n${cards.join('\n\n')}`;
+        const usr = [timeContext(0), worldLine(), diaryBlock(people.slice(0, 3), null, true), mainChatContext(people, settings.mainChatMessages)].filter(Boolean).join('\n\n') || '[No story context yet.]';
+        const data = readJsonLoose(await feedCall(sys, usr));
+        const who = feedName(data && data.from, people);
+        const text = cleanLine(data && data.text, 400);
+        if (!who || !text) { u.rumour.payAt = Date.now() + 6 * 3600000; saveSettings(); return; }   // try again later
+        const verdict = ['true', 'false', 'unclear'].includes(data.verdict) ? data.verdict : 'unclear';
+        u.rumour.verdict = verdict; u.rumour.by = who; u.rumour.paidAt = Date.now();
+        settings.active[who] = true;
+        pushMsg(who, 'char', text, who);
+        settings.unread[who] = (settings.unread[who] || 0) + 1;
+        pushRaw(uid, { who: 'char', name: contactLabel(uid), text: `[SYSTEM: ${t('rum_' + verdict, { name: who })}]`, ts: Date.now() });
+        saveSettings(); renderBubbles(); renderButton();
+        notify(who, text, who);
+    } catch (e) { if (!(e && (e.name === 'AbortError' || e.name === 'TimeoutError'))) console.warn('[Phone] rumour payoff failed', e); }
+    finally { rumourBusy = false; }
+}
+function deleteUnknown(id) {
+    if (!isUnknown(id)) return;
+    forgetMessages(settings.threads[id]);
+    for (const k of ['threads', 'state', 'unread', 'active', 'diaries', 'unknown', 'hidden', 'blocked']) delete settings[k][id];
+    if (settings.current === id) settings.current = '';
+    saveSettings();
+}
+
+/* ============================================================
+   GALLERY (2.1.0) — every photo on the phone: those they sent (once
+   developed), yours, and the feed's. Filter by person or favourites,
+   open one full screen, star it, go to its conversation, or delete
+   it (the message stays; the picture becomes undeveloped again).
+   Nothing is asked of a model.
+   ============================================================ */
+let galFilter = '';      // '' all | '*' favourites | a person
+let galOpen = '';        // the key of the photo open full screen
+function galleryItems() {
+    const out = [];
+    for (const id of Object.keys(settings.threads || {})) {
+        for (const m of settings.threads[id] || []) {
+            const key = m.who === 'char' ? m.gen : m.imgKey;
+            if (typeof key !== 'string' || !key.startsWith(IMG_PREFIX)) continue;
+            const k = classify(m.text);
+            out.push({ key, who: m.who === 'user' ? (name1 || t('pv_you')) : m.name, mine: m.who === 'user', ts: m.ts, caption: k.caption || stripNamePrefix(k.text || '', m.name), where: id, src: 'chat' });
+        }
+    }
+    for (const x of feedStore().posts) if (x.imgKey) out.push({ key: x.imgKey, who: x.author, ts: x.ts, caption: x.photo || x.text, where: '', src: 'feed', post: x.id });
+    return out.sort((a, b) => b.ts - a.ts);
+}
+function galleryDelete(key) {
+    for (const id of Object.keys(settings.threads || {})) for (const m of settings.threads[id] || []) {
+        if (m.gen === key) delete m.gen;
+        if (m.imgKey === key) delete m.imgKey;
+    }
+    for (const x of feedStore().posts) if (x.imgKey === key) delete x.imgKey;
+    delete settings.favs[key];
+    dropImages([key]);
+    genRev++; lastSig = '';
+    saveSettings();
+}
+function renderGalleryApp(box) {
+    const all = galleryItems();
+    const people = [...new Set(all.map(x => x.who))];
+    if (galFilter && galFilter !== '*' && !people.includes(galFilter)) galFilter = '';
+    const list = all.filter(x => !galFilter || (galFilter === '*' ? settings.favs[x.key] : x.who === galFilter));
+    const open = galOpen ? all.find(x => x.key === galOpen) : null;
+    if (galOpen && !open) galOpen = '';
+    const chip = (v, label) => `<button type="button" class="rph-gal-chip" data-gal="filter" data-v="${escapeHtml(v)}" aria-pressed="${galFilter === v}">${label}</button>`;
+    const html = `<div class="rph-apphead gallery"><button type="button" class="rph-tbtn" data-act="home" aria-label="${escapeHtml(t('lk_home'))}" data-focus><i class="fa-solid fa-chevron-left" aria-hidden="true"></i></button><b>${escapeHtml(t('app_gallery'))}</b><span class="rph-tbtn-gap"></span></div>
+        <div class="rph-appbody rph-gal">
+            ${all.length ? `<div class="rph-gal-chips">${chip('', escapeHtml(t('gal_all')))}${chip('*', `<i class="fa-solid fa-star" aria-hidden="true"></i> ${escapeHtml(t('gal_favs'))}`)}${people.map(p => chip(p, escapeHtml(p))).join('')}</div>` : ''}
+            ${list.length ? `<div class="rph-gal-grid">${list.map(x => `<button type="button" class="rph-gal-cell" data-gal="open" data-key="${escapeHtml(x.key)}" aria-label="${escapeHtml(t('gal_open', { name: x.who }))}">${imgTag(x.key)}${settings.favs[x.key] ? '<i class="fa-solid fa-star rph-gal-star" aria-hidden="true"></i>' : ''}</button>`).join('')}</div>`
+            : `<div class="rph-fd-off"><i class="fa-solid fa-images" aria-hidden="true"></i><p>${escapeHtml(t(all.length ? 'gal_none_here' : 'gal_empty'))}</p></div>`}
+        </div>
+        ${open ? `<div class="rph-gal-view" role="dialog" aria-modal="true" tabindex="-1" aria-label="${escapeHtml(t('gal_open', { name: open.who }))}">
+            <div class="rph-gal-top"><button type="button" class="rph-tbtn" data-gal="close" aria-label="${escapeHtml(t('gal_close'))}" data-focus><i class="fa-solid fa-xmark" aria-hidden="true"></i></button><span><b>${escapeHtml(open.who)}</b><small>${escapeHtml(whenShort(open.ts))}${open.src === 'feed' ? ' · ' + escapeHtml(t('app_feed')) : ''}</small></span></div>
+            <div class="rph-gal-pic">${imgTag(open.key)}</div>
+            ${open.caption ? `<p class="rph-gal-cap">${escapeHtml(String(open.caption).slice(0, 300))}</p>` : ''}
+            <div class="rph-gal-acts">
+                <button type="button" class="rph-gal-act" data-gal="prev" aria-label="${escapeHtml(t('gal_prev'))}"><i class="fa-solid fa-chevron-left" aria-hidden="true"></i></button>
+                <button type="button" class="rph-gal-act${settings.favs[open.key] ? ' on' : ''}" data-gal="fav" aria-pressed="${!!settings.favs[open.key]}" aria-label="${escapeHtml(t('gal_fav'))}"><i class="fa-solid fa-star" aria-hidden="true"></i></button>
+                ${open.where ? `<button type="button" class="rph-gal-act" data-gal="chat" aria-label="${escapeHtml(t('gal_chat'))}"><i class="fa-solid fa-comment" aria-hidden="true"></i></button>` : ''}
+                <button type="button" class="rph-gal-act danger" data-gal="del" aria-label="${escapeHtml(t('gal_del'))}"><i class="fa-solid fa-trash" aria-hidden="true"></i></button>
+                <button type="button" class="rph-gal-act" data-gal="next" aria-label="${escapeHtml(t('gal_next'))}"><i class="fa-solid fa-chevron-right" aria-hidden="true"></i></button>
+            </div>
+        </div>` : ''}`;
+    if (box.dataset.sig === html) return;
+    const sc = box.querySelector('.rph-appbody'); const top = sc ? sc.scrollTop : 0;
+    box.innerHTML = html; box.dataset.sig = html;
+    const nsc = box.querySelector('.rph-appbody'); if (nsc) nsc.scrollTop = top;
+    box.querySelectorAll('img.rph-img[data-key]:not([src])').forEach(async im => { const u = await imageUrl(im.dataset.key); if (u && im.isConnected) im.src = u; });
+    // the open picture holds the focus, so the arrows and Escape reach it; closed, the focus goes back to its cell
+    const view = box.querySelector('.rph-gal-view');
+    if (view) view.focus({ preventScroll: true });
+    else if (galLast) { box.querySelector(`.rph-gal-cell[data-key="${CSS.escape(galLast)}"]`)?.focus({ preventScroll: true }); galLast = ''; }
+}
+let galLast = '';
+function onGalleryClick(e) {
+    const el = e.target.closest('[data-gal]');
+    if (!el) return;
+    const a = el.dataset.gal;
+    const all = galleryItems();
+    const list = all.filter(x => !galFilter || (galFilter === '*' ? settings.favs[x.key] : x.who === galFilter));
+    if (a === 'filter') { galFilter = el.dataset.v; }
+    else if (a === 'open') { galOpen = el.dataset.key; }
+    else if (a === 'close') { galLast = galOpen; galOpen = ''; }
+    else if (a === 'prev' || a === 'next') { const i = list.findIndex(x => x.key === galOpen); if (i >= 0 && list.length > 1) galOpen = list[(i + (a === 'next' ? 1 : -1) + list.length) % list.length].key; }
+    else if (a === 'fav') { if (settings.favs[galOpen]) delete settings.favs[galOpen]; else settings.favs[galOpen] = true; saveSettings(); }
+    else if (a === 'chat') { const it = all.find(x => x.key === galOpen); galOpen = ''; if (it && it.where) { openContact(it.where); return; } }
+    else if (a === 'del') {
+        if (!el.classList.contains('armed')) { el.classList.add('armed'); el.setAttribute('aria-label', t('grp_del_sure')); clearTimeout(el._d); el._d = setTimeout(() => { if (el.isConnected) { el.classList.remove('armed'); el.setAttribute('aria-label', t('gal_del')); } }, 3000); return; }
+        const i = list.findIndex(x => x.key === galOpen);
+        galleryDelete(galOpen);
+        const rest = list.filter(x => x.key !== galOpen);
+        galOpen = rest.length ? rest[Math.min(i, rest.length - 1)].key : '';
+    }
+    renderBubbles();
+}
+
+/* ============================================================
+   CALENDAR (2.1.0). The month, today, the story's own date (Scene
+   Card), the story's event, your reminders (add, change, delete — they
+   ring at their time) and birthdays. A birthday is looked for in a
+   card on a button, one request per card, kept until the card changes;
+   a card that does not say leaves it empty.
+   ============================================================ */
+const BIRTHDAY_PROMPT = `From the character description below, give their birthday only if the text states it (day and month). If it is not stated, leave it empty — never guess.
+Output strictly JSON: {"birthday":""}`;
+const MONTHS_RU = ['января', 'февраля', 'марта', 'апреля', 'мая', 'июня', 'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря'];
+let calMonth = null;      // { y, m } shown
+let calEdit = null;       // null | 'new' | a reminder id
+let calBusy = false;
+function ymd(d) { return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
+function cardStamp(n) { const ch = cardChar(n); return ch ? textHash((ch.description || '') + '|' + (ch.personality || '')) : ''; }
+// "12 March", "March 12", "12.03", "03/12" (day first when ambiguous) → { day, month }
+function parseBirthday(raw) {
+    const s = String(raw || '').toLowerCase().trim();
+    if (!s) return null;
+    const EN = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+    const RU = ['янв', 'фев', 'мар', 'апр', 'мая', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек'];
+    let month = -1;
+    EN.forEach((m, i) => { if (month < 0 && new RegExp('\\b' + m).test(s)) month = i; });
+    RU.forEach((m, i) => { if (month < 0 && s.includes(m)) month = i; });
+    if (month < 0 && s.includes('май')) month = 4;
+    const nums = (s.match(/\d{1,4}/g) || []).map(Number).filter(n => n < 1000);
+    let day = 0;
+    if (month >= 0) day = nums.find(n => n >= 1 && n <= 31) || 0;
+    else if (nums.length >= 2) { day = nums[0]; month = nums[1] - 1; if (day <= 12 && month > 11) { const t2 = day; day = month + 1; month = t2 - 1; } }
+    if (month < 0 || month > 11 || day < 1 || day > 31) return null;
+    return { day, month: month + 1 };
+}
+async function findBirthdays() {
+    if (calBusy) return;
+    if (!apiKey()) { toastr.warning(t('nokey')); return; }
+    const todo = phonePeople().filter(n => cardChar(n) && settings.birthdays[n]?.stamp !== cardStamp(n)).slice(0, 8);
+    if (!todo.length) { toastr.info(t('cal_bd_done')); return; }
+    calBusy = true; renderBubbles();
+    let found = 0;
+    try {
+        for (const n of todo) {
+            const data = readJsonLoose(await feedCall(BIRTHDAY_PROMPT, `CHARACTER: ${n}\n\n${cardNorm([cardChar(n).description, cardChar(n).personality].filter(Boolean).join('\n'))}`));
+            const bd = parseBirthday(data && data.birthday);
+            settings.birthdays[n] = bd ? { day: bd.day, month: bd.month, stamp: cardStamp(n) } : { day: 0, month: 0, stamp: cardStamp(n) };
+            if (bd) found++;
+            saveSettings(); renderBubbles();
+        }
+        toastr.info(t('cal_bd_found', { n: found }));
+    } catch (e) { toastr.warning(e && e.name === 'TimeoutError' ? t('timeout') : t('err')); console.warn('[Phone] birthdays failed', e); }
+    finally { calBusy = false; renderBubbles(); }
+}
+function fmtDayMonth(day, month) { return settings.language === 'en' ? new Date(2000, month - 1, day).toLocaleDateString('en-GB', { day: 'numeric', month: 'long' }) : `${day} ${MONTHS_RU[month - 1]}`; }
+function nextBirthday(b) { const now = new Date(); let d = new Date(now.getFullYear(), b.month - 1, b.day); if (ymd(d) < ymd(now)) d = new Date(now.getFullYear() + 1, b.month - 1, b.day); return d; }
+// what is coming: reminders from today on, the year's birthdays — soonest first
+function calUpcoming() {
+    const today = ymd(new Date());
+    const items = settings.reminders.filter(r => r.date >= today).map(r => ({ kind: 'rem', date: r.date, time: r.time || '', text: r.text, id: r.id }));
+    for (const n of Object.keys(settings.birthdays)) { const b = settings.birthdays[n]; if (b && b.day) items.push({ kind: 'bd', date: ymd(nextBirthday(b)), time: '', text: t('cal_bd_of', { name: n }), who: n }); }
+    return items.sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
+}
+function remindersTick() {
+    if (!settings.enabled) return;
+    const now = new Date(), today = ymd(now), hm = String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0');
+    let changed = false;
+    for (const r of settings.reminders) {
+        if (r.fired) continue;
+        if (r.date < today || (r.date === today && (!r.time || r.time <= hm))) { r.fired = true; r.unseen = true; changed = true; notify(t('app_calendar'), r.text, null); }
+    }
+    for (const n of Object.keys(settings.birthdays)) {
+        const b = settings.birthdays[n];
+        if (b && b.day && b.day === now.getDate() && b.month === now.getMonth() + 1 && b.rang !== today) { b.rang = today; b.unseen = true; changed = true; notify(n, t('cal_bd_today', { name: n }), null); }
+    }
+    if (changed) { saveSettings(); renderBubbles(); renderButton(); }
+}
+function calNews() {
+    const out = [];
+    for (const r of settings.reminders) if (r.unseen) out.push({ id: 'cal', label: t('app_calendar'), icon: 'fa-calendar-days', text: r.text });
+    for (const n of Object.keys(settings.birthdays)) if (settings.birthdays[n]?.unseen) out.push({ id: 'cal', label: t('app_calendar'), icon: 'fa-cake-candles', text: t('cal_bd_today', { name: n }) });
+    return out;
+}
+function renderCalendarApp(box) {
+    const now = new Date();
+    if (!calMonth) calMonth = { y: now.getFullYear(), m: now.getMonth() };
+    const first = new Date(calMonth.y, calMonth.m, 1);
+    const days = new Date(calMonth.y, calMonth.m + 1, 0).getDate();
+    const lead = (first.getDay() + 6) % 7;   // weeks start on Monday
+    const loc = settings.language === 'en' ? 'en-GB' : 'ru-RU';
+    const title = first.toLocaleDateString(loc, { month: 'long', year: 'numeric' });
+    const wd = [...Array(7)].map((_, i) => new Date(2024, 0, 1 + i).toLocaleDateString(loc, { weekday: 'short' }).replace('.', ''));
+    const marks = new Set(settings.reminders.map(r => r.date));
+    for (const n of Object.keys(settings.birthdays)) { const b = settings.birthdays[n]; if (b && b.day) marks.add(calMonth.y + '-' + String(b.month).padStart(2, '0') + '-' + String(b.day).padStart(2, '0')); }
+    const today = ymd(now);
+    const cells = [...Array(lead)].map(() => '<span class="rph-cal-d empty"></span>').join('') + [...Array(days)].map((_, i) => { const d = ymd(new Date(calMonth.y, calMonth.m, i + 1)); return `<button type="button" class="rph-cal-d${d === today ? ' today' : ''}${marks.has(d) ? ' mark' : ''}" data-cal="day" data-d="${d}" aria-label="${escapeHtml(new Date(calMonth.y, calMonth.m, i + 1).toLocaleDateString(loc, { day: 'numeric', month: 'long' }))}">${i + 1}</button>`; }).join('');
+    const w = storyWorld(), ev = storyEvent();
+    const ed = calEdit && calEdit !== 'new' ? settings.reminders.find(r => r.id === calEdit) : null;
+    if (calEdit && calEdit !== 'new' && !ed) calEdit = null;
+    const up = calUpcoming().slice(0, 12);
+    const people = phonePeople().filter(n => cardChar(n));
+    const missingBd = people.filter(n => settings.birthdays[n]?.stamp !== cardStamp(n)).length;
+    const html = `<div class="rph-apphead calendar"><button type="button" class="rph-tbtn" data-act="home" aria-label="${escapeHtml(t('lk_home'))}" data-focus><i class="fa-solid fa-chevron-left" aria-hidden="true"></i></button><b>${escapeHtml(t('app_calendar'))}</b>
+        <button type="button" class="rph-tbtn" data-cal="new" aria-label="${escapeHtml(t('cal_add'))}" title="${escapeHtml(t('cal_add'))}"><i class="fa-solid fa-plus" aria-hidden="true"></i></button></div>
+        <div class="rph-appbody rph-cal">
+            ${w && (w.date || w.time) ? `<div class="rph-cal-story"><i class="fa-solid fa-book-open" aria-hidden="true"></i> ${escapeHtml(t('cal_story'))}: <b>${escapeHtml([w.date, w.time].filter(Boolean).join(', ').slice(0, 60))}</b></div>` : ''}
+            <div class="rph-cal-head"><button type="button" class="rph-tbtn" data-cal="prev" aria-label="${escapeHtml(t('cal_prev'))}"><i class="fa-solid fa-chevron-left" aria-hidden="true"></i></button><b>${escapeHtml(title.charAt(0).toUpperCase() + title.slice(1))}</b><button type="button" class="rph-tbtn" data-cal="next" aria-label="${escapeHtml(t('cal_next'))}"><i class="fa-solid fa-chevron-right" aria-hidden="true"></i></button></div>
+            <div class="rph-cal-grid">${wd.map(x => `<span class="rph-cal-wd">${escapeHtml(x)}</span>`).join('')}${cells}</div>
+            ${calEdit ? `<div class="rph-cal-form">
+                <input type="date" class="text_pole rph-cal-date" aria-label="${escapeHtml(t('cal_date'))}" value="${escapeHtml(ed ? ed.date : (calEdit === 'new' && box.dataset.pick) || today)}">
+                <input type="time" class="text_pole rph-cal-time" aria-label="${escapeHtml(t('cal_time'))}" value="${escapeHtml(ed ? ed.time : '')}">
+                <input type="text" class="text_pole rph-cal-text" maxlength="160" placeholder="${escapeHtml(t('cal_text_ph'))}" aria-label="${escapeHtml(t('cal_text_ph'))}" value="${escapeHtml(ed ? ed.text : '')}">
+                <div class="rph-grp-btns">${ed ? `<button type="button" class="rph-gbtn danger" data-cal="del">${escapeHtml(t('grp_del'))}</button>` : ''}<span class="rph-grp-gap"></span><button type="button" class="rph-gbtn quiet" data-cal="cancel">${escapeHtml(t('grp_cancel'))}</button><button type="button" class="rph-gbtn main" data-cal="save">${escapeHtml(t(ed ? 'grp_save' : 'grp_create'))}</button></div>
+            </div>` : ''}
+            ${ev ? `<div class="rph-card-h">${escapeHtml(t('wg_event'))}</div><div class="rph-cal-item now"><i class="fa-solid fa-scroll" aria-hidden="true"></i><span>${escapeHtml(String(ev.title).slice(0, 80))}</span></div>` : ''}
+            <div class="rph-card-h">${escapeHtml(t('cal_soon'))}</div>
+            ${up.length ? up.map(x => `<button type="button" class="rph-cal-item" data-cal="${x.kind === 'rem' ? 'edit' : 'none'}" data-id="${escapeHtml(x.id || '')}">
+                <i class="fa-solid ${x.kind === 'bd' ? 'fa-cake-candles' : 'fa-bell'}" aria-hidden="true"></i>
+                <span>${escapeHtml(x.text)}<small>${escapeHtml(new Date(x.date + 'T00:00').toLocaleDateString(loc, { weekday: 'short', day: 'numeric', month: 'long' }) + (x.time ? ', ' + x.time : ''))}</small></span>
+            </button>`).join('') : `<p class="rph-card-p">${escapeHtml(t('cal_nothing'))}</p>`}
+            ${openRumours().length ? `<div class="rph-card-h">${escapeHtml(t('rum_title'))}</div>${openRumours().slice(-6).reverse().map(([id, u]) => `<button type="button" class="rph-cal-item rumour${u.rumour.verdict ? ' v-' + u.rumour.verdict : ''}" data-cal="rumour" data-id="${escapeHtml(id)}">
+                <i class="fa-solid ${u.rumour.verdict === 'true' ? 'fa-circle-check' : u.rumour.verdict === 'false' ? 'fa-circle-xmark' : u.rumour.verdict ? 'fa-circle-question' : 'fa-ear-listen'}" aria-hidden="true"></i>
+                <span>${escapeHtml(clip(u.rumour.text, 90))}<small>${escapeHtml((u.from || t('unk_unknown')) + ' · ' + (u.rumour.verdict ? t('rum_v_' + u.rumour.verdict) + (u.rumour.by ? ' · ' + u.rumour.by : '') : t('rum_open')))}</small></span>
+            </button>`).join('')}` : ''}
+            ${people.length ? `<button type="button" class="rph-gbtn quiet rph-cal-bd" data-cal="bd" title="${escapeHtml(t('cost_n', { n: Math.min(8, missingBd) }))}"${calBusy || !missingBd ? ' disabled' : ''}>${escapeHtml(calBusy ? t('cal_bd_busy') : missingBd ? t('cal_bd_btn') : t('cal_bd_done'))}</button>` : ''}
+        </div>`;
+    if (box.dataset.sig === html) return;
+    const keepVals = calEdit ? ['.rph-cal-date', '.rph-cal-time', '.rph-cal-text'].map(q => box.querySelector(q)?.value) : null;
+    box.innerHTML = html; box.dataset.sig = html;
+    if (keepVals && box.dataset.keep === String(calEdit)) ['.rph-cal-date', '.rph-cal-time', '.rph-cal-text'].forEach((q, i) => { const el = box.querySelector(q); if (el && keepVals[i] !== undefined) el.value = keepVals[i]; });
+    box.dataset.keep = String(calEdit || '');
+}
+function onCalendarClick(e) {
+    const el = e.target.closest('[data-cal]');
+    if (!el || el.disabled) return;
+    const a = el.dataset.cal, box = el.closest('.rph-v-app');
+    if (a === 'rumour') { const id = String(el.dataset.id || ''); if (settings.unknown[id]) { const u = settings.unknown[id]; openContact(u.rumour && u.rumour.by && u.rumour.verdict ? u.rumour.by : id); } return; }
+    if (a === 'prev' || a === 'next') { const d = new Date(calMonth.y, calMonth.m + (a === 'next' ? 1 : -1), 1); calMonth = { y: d.getFullYear(), m: d.getMonth() }; }
+    else if (a === 'new') { calEdit = 'new'; box.dataset.pick = ''; }
+    else if (a === 'day') { calEdit = 'new'; box.dataset.pick = el.dataset.d; box.dataset.keep = ''; }
+    else if (a === 'edit') { calEdit = el.dataset.id; box.dataset.keep = ''; }
+    else if (a === 'cancel') { calEdit = null; }
+    else if (a === 'bd') { findBirthdays(); return; }
+    else if (a === 'save') {
+        const date = box.querySelector('.rph-cal-date').value, time = box.querySelector('.rph-cal-time').value, text = String(box.querySelector('.rph-cal-text').value).trim().slice(0, 160);
+        if (!/^\d{4}-\d\d-\d\d$/.test(date) || !text) { toastr.info(t('cal_need')); return; }
+        const tm = /^\d\d:\d\d$/.test(time) ? time : '';
+        if (calEdit === 'new') settings.reminders.push({ id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), date, time: tm, text, fired: false });
+        else { const r = settings.reminders.find(x => x.id === calEdit); if (r) Object.assign(r, { date, time: tm, text, fired: false, unseen: false }); }
+        calEdit = null; saveSettings();
+    }
+    else if (a === 'del') {
+        if (!el.classList.contains('armed')) { el.classList.add('armed'); el.textContent = t('grp_del_sure'); clearTimeout(el._d); el._d = setTimeout(() => { if (el.isConnected) { el.classList.remove('armed'); el.textContent = t('grp_del'); } }, 3000); return; }
+        settings.reminders = settings.reminders.filter(r => r.id !== calEdit); calEdit = null; saveSettings();
+    }
+    else return;
+    renderBubbles();
+}
+
+/* ============================================================
+   MAPS (2.1.0) — RPG Map seen from the phone: where you are, every
+   room of the active map with the faces of who is there now, and
+   «who is where» for everyone on the phone. A room opens with its
+   picture and who is there; «Share location» sends it into a chat.
+   Read-only: nothing is moved or written on the Map, nothing asked
+   of a model. Without RPG Map the app does not show.
+   ============================================================ */
+function mapBridge() { try { const m = window.RPG && window.RPG.map; return m && m.available && (!m.isEnabled || m.isEnabled()) && m.listRooms ? m : null; } catch (e) { return null; } }
+let mapOpen = '';        // the room open in the app
+let mapShare = false;    // the «share with…» list is open
+function whereAll() {
+    const m = mapBridge(); if (!m || !m.whereIs) return [];
+    return phonePeople().map(n => { let w = null; try { w = m.whereIs(n); } catch (e) { w = null; } return w ? { n, ...w } : null; }).filter(Boolean);
+}
+
+/* ============================================================
+   THE MAP ITSELF (2.1.2). The Map extension knows districts →
+   places → rooms, but no coordinates — so the phone draws a city
+   plan from them: each district a soft area, each place a cluster,
+   each room a pin, roads between them. The layout is worked out
+   from the names (the same map every time), drags and zooms like a
+   real maps app, shows you and the people on the phone at their
+   rooms. A pin opens the same room card as the list, which stays
+   one tap away.
+   ============================================================ */
+let mapVB = null, mapVBKey = '';     // the visible part of the plan (memory only)
+function seedOf(str) { let h = 2166136261; for (const ch of String(str)) { h ^= ch.codePointAt(0); h = Math.imul(h, 16777619); } return h >>> 0; }
+function rng(seed) { let a = seed >>> 0; return () => { a = (a + 0x6D2B79F5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
+function mapLayout(rooms) {
+    const blocks = [];
+    for (const r of rooms) {
+        let b = blocks.find(x => x.name === (r.block || '')); if (!b) blocks.push(b = { name: r.block || '', locs: [] });
+        let l = b.locs.find(x => x.name === (r.location || '')); if (!l) b.locs.push(l = { name: r.location || '', rooms: [] });
+        l.rooms.push(r);
+    }
+    const cols = Math.max(1, Math.ceil(Math.sqrt(blocks.length))), CW = 330, CH = 300;
+    const pins = [], roads = [], areas = [], labels = [], houses = [], water = [];
+    const blockCenters = [];
+    blocks.forEach((b, bi) => {
+        const R = rng(seedOf('b' + b.name + bi));
+        const ox = (bi % cols) * CW + (R() - .5) * 40, oy = Math.floor(bi / cols) * CH + (R() - .5) * 40;
+        const lc = Math.max(1, Math.ceil(Math.sqrt(b.locs.length))), lr = Math.ceil(b.locs.length / lc);
+        const sw = (CW - 60) / lc, sh = (CH - 80) / lr;
+        const pts = [], locCenters = [];
+        b.locs.forEach((l, li) => {
+            const Rl = rng(seedOf('l' + b.name + l.name + li));
+            const cx = ox + 30 + (li % lc + .5) * sw + (Rl() - .5) * sw * .25, cy = oy + 55 + (Math.floor(li / lc) + .5) * sh + (Rl() - .5) * sh * .25;
+            locCenters.push({ x: cx, y: cy });
+            const k = l.rooms.length, rad = k === 1 ? 0 : Math.min(Math.min(sw, sh) / 2 - 14, 26 + k * 6);
+            const a0 = Rl() * Math.PI * 2;
+            l.rooms.forEach((r, ri) => {
+                const a = a0 + ri * Math.PI * 2 / k, rr = rad * (k > 6 && ri % 2 ? .62 : 1);
+                const x = cx + Math.cos(a) * rr, y = cy + Math.sin(a) * rr * .82;
+                pins.push({ r, x, y }); pts.push({ x, y });
+                if (k > 1) roads.push({ kind: 'lane', x1: cx, y1: cy, x2: x, y2: y });
+            });
+            if (l.name && b.locs.length + k > 2) labels.push({ kind: 'loc', text: l.name, x: cx, y: cy - (rad ? rad * .82 : 0) - 14 });
+        });
+        // places of one district are joined by streets: each to its nearest earlier one
+        locCenters.forEach((c, i) => { if (!i) return; let best = 0, bd = Infinity; for (let j = 0; j < i; j++) { const d = (locCenters[j].x - c.x) ** 2 + (locCenters[j].y - c.y) ** 2; if (d < bd) { bd = d; best = j; } } roads.push({ kind: 'street', x1: locCenters[best].x, y1: locCenters[best].y, x2: c.x, y2: c.y, bend: (R() - .5) * .4 }); });
+        // the district's area: a soft closed shape around its rooms
+        const minX = Math.min(...pts.map(p => p.x)), maxX = Math.max(...pts.map(p => p.x)), minY = Math.min(...pts.map(p => p.y)), maxY = Math.max(...pts.map(p => p.y));
+        const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2 - 6, rx = (maxX - minX) / 2 + 48, ry = (maxY - minY) / 2 + 50;
+        const ring = []; const N = 11;
+        for (let i = 0; i < N; i++) { const a = i / N * Math.PI * 2, f = .9 + R() * .16; ring.push({ x: cx + Math.cos(a) * rx * f, y: cy + Math.sin(a) * ry * f }); }
+        areas.push({ d: smoothClosed(ring), hue: seedOf(b.name) % 6 });
+        // houses: small footprints scattered in the district, never on a pin — a city, not a diagram
+        for (let i = 0, tries = 0; i < 14 && tries < 80; tries++) {
+            const a = R() * Math.PI * 2, f = Math.sqrt(R()) * .86, x = cx + Math.cos(a) * rx * f, y = cy + Math.sin(a) * ry * f;
+            if (pts.some(q => (q.x - x) ** 2 + (q.y - y) ** 2 < 26 ** 2)) continue;
+            houses.push({ x, y, w: 8 + R() * 10, h: 6 + R() * 8, rot: (R() - .5) * 30 }); i++;
+        }
+        // a district by the water gets its shore
+        if (/harbou?r|port|pier|dock|sea|lake|river|bay|shore|coast|beach|гаван|порт|пристан|причал|мор[еяю]|озер|рек[аи]|залив|берег|пляж/i.test(b.name + ' ' + b.locs.map(l => l.name).join(' '))) {
+            const side = R() < .5 ? -1 : 1, wy = cy + side * (ry + 6);
+            const f = v => v.toFixed(1), x0 = cx - rx * 1.6, x1 = cx + rx * 1.6;
+            water.push(`M${f(x0 - 2000)},${f(wy - side * 40)} C${f(x0 - 600)},${f(wy - side * 40)} ${f(x0)},${f(wy)} ${f(x0)},${f(wy)} Q${f(cx)},${f(wy + side * 26)} ${f(x1)},${f(wy)} C${f(x1)},${f(wy)} ${f(x1 + 600)},${f(wy - side * 40)} ${f(x1 + 2000)},${f(wy - side * 40)} L${f(x1 + 2000)},${f(wy + side * 3000)} L${f(x0 - 2000)},${f(wy + side * 3000)}Z`);
+        }
+        if (b.name) labels.push({ kind: 'block', text: b.name, x: cx, y: cy - ry + 20 });
+        blockCenters.push({ x: cx, y: cy });
+    });
+    // a place's name never sits on its district's name
+    for (const l of labels) if (l.kind === 'loc') for (const bl of labels) if (bl.kind === 'block' && Math.abs(l.y - bl.y) < 16 && Math.abs(l.x - bl.x) < (bl.text.length + l.text.length) * 4.2) l.y = bl.y + 17;
+    blockCenters.forEach((c, i) => { if (!i) return; let best = 0, bd = Infinity; for (let j = 0; j < i; j++) { const d = (blockCenters[j].x - c.x) ** 2 + (blockCenters[j].y - c.y) ** 2; if (d < bd) { bd = d; best = j; } } roads.unshift({ kind: 'road', x1: blockCenters[best].x, y1: blockCenters[best].y, x2: c.x, y2: c.y, bend: .18 }); });
+    const all = pins.length ? pins : [{ x: 0, y: 0 }];
+    const box = { x: Math.min(...all.map(p => p.x)) - 90, y: Math.min(...all.map(p => p.y)) - 90 };
+    box.w = Math.max(...all.map(p => p.x)) + 90 - box.x; box.h = Math.max(...all.map(p => p.y)) + 90 - box.y;
+    return { pins, roads, areas, labels, box, houses, water };
+}
+function smoothClosed(p) {
+    const n = p.length, f = v => v.toFixed(1);
+    let d = `M${f((p[0].x + p[1].x) / 2)},${f((p[0].y + p[1].y) / 2)}`;
+    for (let i = 1; i <= n; i++) { const a = p[i % n], b = p[(i + 1) % n]; d += ` Q${f(a.x)},${f(a.y)} ${f((a.x + b.x) / 2)},${f((a.y + b.y) / 2)}`; }
+    return d + 'Z';
+}
+function roadPath(r) {
+    const f = v => v.toFixed(1);
+    if (!r.bend) return `M${f(r.x1)},${f(r.y1)} L${f(r.x2)},${f(r.y2)}`;
+    const mx = (r.x1 + r.x2) / 2 - (r.y2 - r.y1) * r.bend, my = (r.y1 + r.y2) / 2 + (r.x2 - r.x1) * r.bend;
+    return `M${f(r.x1)},${f(r.y1)} Q${f(mx)},${f(my)} ${f(r.x2)},${f(r.y2)}`;
+}
+function svgFace(name, x, y, rad, k) {
+    const ch = cardFor(name);
+    const id = 'rphc' + k;
+    const inner = ch && ch.avatar
+        ? `<clipPath id="${id}"><circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${rad}"/></clipPath><image href="/thumbnail?type=avatar&amp;file=${escapeHtml(encodeURIComponent(ch.avatar))}" x="${(x - rad).toFixed(1)}" y="${(y - rad).toFixed(1)}" width="${rad * 2}" height="${rad * 2}" preserveAspectRatio="xMidYMin slice" clip-path="url(#${id})"/>`
+        : `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${rad}" fill="hsl(${seedOf(name) % 360},45%,40%)"/><text x="${x.toFixed(1)}" y="${(y + rad * .36).toFixed(1)}" class="ini" font-size="${(rad * .9).toFixed(1)}">${escapeHtml(String(name).trim().split(/\s+/).map(w => w[0]).join('').slice(0, 2).toUpperCase())}</text>`;
+    return `<g class="face"><circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${rad + 1.8}" class="ring"/>${inner}</g>`;
+}
+function mapPlanHtml(rooms, cur, where) {
+    const L = mapLayout(rooms);
+    const at = name => where.filter(x => x.kind === 'room' && x.room && x.room.toLowerCase() === String(name).toLowerCase());
+    let k = 0;
+    const pins = L.pins.map(p => {
+        const here = cur && cur.room === p.r.room, ppl = at(p.r.room).concat(here ? where.filter(x => x.kind === 'you') : []);
+        const icon = p.r.locked ? '' : p.r.trial ? '' : '';
+        const faces = ppl.slice(0, 3).map((x, i) => svgFace(x.n, p.x + 18 + i * 12, p.y, 7.5, k++)).join('') + (ppl.length > 3 ? `<text class="more" x="${(p.x + 18 + 3 * 12 - 4).toFixed(1)}" y="${(p.y + 3).toFixed(1)}">+${ppl.length - 3}</text>` : '');
+        const label = p.r.room + (p.r.locked ? ' · ' + t('map_locked') : '') + (ppl.length ? ' · ' + ppl.map(x => x.n).join(', ') : '');
+        return `<g class="pin${here ? ' here' : ''}${p.r.locked ? ' locked' : ''}" data-map="open" data-room="${escapeHtml(p.r.room)}" tabindex="0" role="button" aria-label="${escapeHtml(label)}" transform="translate(0,0)">
+            ${here ? `<circle class="pulse" cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="9"/>` : ''}
+            <circle class="hit" cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="16"/>
+            <circle class="dot" cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="${here ? 8 : 6.5}"/>
+            ${icon ? `<text class="ic" x="${p.x.toFixed(1)}" y="${(p.y + 2.6).toFixed(1)}">${icon}</text>` : here ? `<circle class="core" cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="3"/>` : ''}
+            <text class="rn" x="${p.x.toFixed(1)}" y="${(p.y + 19).toFixed(1)}">${escapeHtml(clip(p.r.room, 22))}</text>
+            ${faces}
+        </g>`;
+    }).join('');
+    const key = rooms.map(r => r.block + '/' + r.location + '/' + r.room).join('|');
+    if (mapVBKey !== key || !mapVB) {
+        mapVBKey = key;
+        const hp = cur && L.pins.find(p => p.r.room === cur.room);
+        const w = Math.min(Math.max(L.box.w, 300), 330), h = w * 1.45;
+        mapVB = hp ? { x: hp.x - w / 2, y: hp.y - h / 2, w, h } : { x: L.box.x + L.box.w / 2 - Math.max(L.box.w, L.box.h / 1.45) / 2, y: L.box.y + L.box.h / 2 - Math.max(L.box.w * 1.45, L.box.h) / 2, w: Math.max(L.box.w, L.box.h / 1.45), h: Math.max(L.box.w * 1.45, L.box.h) };
+    }
+    return `<svg class="rph-plan" xmlns="http://www.w3.org/2000/svg" role="group" aria-label="${escapeHtml(t('map_plan'))}" data-box="${[L.box.x, L.box.y, L.box.w, L.box.h].map(v => Math.round(v)).join(',')}">
+        <defs><pattern id="rph-plan-grid" width="40" height="40" patternUnits="userSpaceOnUse"><path d="M40 0H0V40" class="grid"/></pattern></defs>
+        <rect x="-5000" y="-5000" width="10000" height="10000" class="land"/><rect x="-5000" y="-5000" width="10000" height="10000" fill="url(#rph-plan-grid)"/>
+        ${L.water.map(d => `<path d="${d}" class="water"/>`).join('')}
+        ${L.areas.map(a => `<path d="${a.d}" class="area a${a.hue}"/>`).join('')}
+        ${L.houses.map(h => `<rect class="house" x="${(h.x - h.w / 2).toFixed(1)}" y="${(h.y - h.h / 2).toFixed(1)}" width="${h.w.toFixed(1)}" height="${h.h.toFixed(1)}" rx="1.5" transform="rotate(${h.rot.toFixed(0)} ${h.x.toFixed(1)} ${h.y.toFixed(1)})"/>`).join('')}
+        ${L.roads.map(r => `<path d="${roadPath(r)}" class="rd ${r.kind}"/>`).join('')}
+        ${L.labels.filter(l => l.kind === 'block').map(l => `<text class="bl" x="${l.x.toFixed(1)}" y="${l.y.toFixed(1)}">${escapeHtml(clip(l.text, 30))}</text>`).join('')}
+        ${L.labels.filter(l => l.kind === 'loc').map(l => `<text class="ll" x="${l.x.toFixed(1)}" y="${l.y.toFixed(1)}">${escapeHtml(clip(l.text, 28))}</text>`).join('')}
+        ${pins}
+    </svg>`;
+}
+function applyMapVB(svg) {
+    if (!svg || !mapVB) return;
+    svg.setAttribute('viewBox', `${mapVB.x.toFixed(1)} ${mapVB.y.toFixed(1)} ${mapVB.w.toFixed(1)} ${mapVB.h.toFixed(1)}`);
+    const sc = svg.clientWidth ? mapVB.w / svg.clientWidth : 1;   // map units per screen pixel
+    svg.classList.toggle('far', sc > 2.4);
+    svg.classList.toggle('mid', sc > 1.5 && sc <= 2.4);
+}
+function zoomMap(svg, f, px, py) {
+    if (!mapVB || !svg) return;
+    const r = svg.getBoundingClientRect();
+    const fx = px == null ? .5 : (px - r.left) / r.width, fy = py == null ? .5 : (py - r.top) / r.height;
+    const [bx, by, bw, bh] = (svg.dataset.box || '0,0,800,800').split(',').map(Number);
+    const w = Math.max(160, Math.min(Math.max(bw, bh) * 2.2, mapVB.w * f)), h = w * (mapVB.h / mapVB.w);
+    mapVB = { x: mapVB.x + (mapVB.w - w) * fx, y: mapVB.y + (mapVB.h - h) * fy, w, h };
+    clampMap(bx, by, bw, bh); applyMapVB(svg);
+}
+function clampMap(bx, by, bw, bh) {
+    const mx = mapVB.w * .6, my = mapVB.h * .6;
+    mapVB.x = Math.max(bx - mx, Math.min(bx + bw - mapVB.w + mx, mapVB.x));
+    mapVB.y = Math.max(by - my, Math.min(by + bh - mapVB.h + my, mapVB.y));
+}
+function centerMapOn(svg, room) {
+    const pin = svg && [...svg.querySelectorAll('.pin')].find(g => g.dataset.room === room);
+    const dot = pin && pin.querySelector('.dot');
+    if (!dot || !mapVB) return;
+    const to = { x: +dot.getAttribute('cx') - mapVB.w / 2, y: +dot.getAttribute('cy') - mapVB.h / 2 };
+    const from = { x: mapVB.x, y: mapVB.y }, t0 = performance.now(), dur = matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 260;
+    const step = (now) => { const k = dur ? Math.min(1, (now - t0) / dur) : 1, e = 1 - Math.pow(1 - k, 3); mapVB.x = from.x + (to.x - from.x) * e; mapVB.y = from.y + (to.y - from.y) * e; applyMapVB(svg); if (k < 1) requestAnimationFrame(step); };
+    requestAnimationFrame(step);
+    pin.classList.remove('ping'); void pin.getBBox(); pin.classList.add('ping');
+}
+let mapDragged = false;
+function wireMap(box) {
+    const svg = box.querySelector('.rph-plan');
+    if (!svg) return;
+    applyMapVB(svg);
+    const pts = new Map(); let last = null, pinch = 0;
+    svg.addEventListener('pointerdown', e => { pts.set(e.pointerId, { x: e.clientX, y: e.clientY }); mapDragged = false; last = { x: e.clientX, y: e.clientY }; if (pts.size === 2) { const [a, b] = [...pts.values()]; pinch = Math.hypot(a.x - b.x, a.y - b.y); } });
+    svg.addEventListener('pointermove', e => {
+        if (!pts.has(e.pointerId)) return;
+        pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        if (pts.size === 2) {
+            const [a, b] = [...pts.values()], d = Math.hypot(a.x - b.x, a.y - b.y);
+            if (pinch) zoomMap(svg, pinch / d, (a.x + b.x) / 2, (a.y + b.y) / 2);
+            pinch = d; mapDragged = true; return;
+        }
+        const dx = e.clientX - last.x, dy = e.clientY - last.y;
+        if (!mapDragged && Math.hypot(dx, dy) < 5) return;
+        if (!mapDragged) { mapDragged = true; try { svg.setPointerCapture(e.pointerId); } catch (er) { /* fine */ } }
+        const sc = mapVB.w / (svg.clientWidth || 1);
+        mapVB.x -= dx * sc; mapVB.y -= dy * sc; last = { x: e.clientX, y: e.clientY };
+        const [bx, by, bw, bh] = (svg.dataset.box || '0,0,800,800').split(',').map(Number); clampMap(bx, by, bw, bh);
+        applyMapVB(svg);
+    });
+    const up = e => { pts.delete(e.pointerId); if (pts.size < 2) pinch = 0; if (pts.size === 1) last = [...pts.values()][0]; };
+    svg.addEventListener('pointerup', up); svg.addEventListener('pointercancel', up);
+    svg.addEventListener('wheel', e => { e.preventDefault(); zoomMap(svg, e.deltaY > 0 ? 1.15 : 1 / 1.15, e.clientX, e.clientY); }, { passive: false });
+    svg.addEventListener('keydown', e => { const g = e.target.closest && e.target.closest('.pin'); if (g && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); mapOpen = g.dataset.room; mapShare = false; renderBubbles(); } });
+}
+
+function renderMapsApp(box) {
+    const m = mapBridge();
+    const rooms = m ? (m.listRooms() || []) : [];
+    let cur = null; try { cur = m && m.getCurrent ? m.getCurrent() : null; } catch (e) { cur = null; }
+    const where = whereAll();
+    const at = r => where.filter(x => x.kind === 'room' && x.room && x.room.toLowerCase() === String(r).toLowerCase());
+    const blocks = [];
+    for (const r of rooms) { let b = blocks.find(x => x.name === (r.block || '') + '\u0001' + (r.location || '')); if (!b) blocks.push(b = { name: (r.block || '') + '\u0001' + (r.location || ''), label: [r.location, r.block].filter(Boolean).join(' · '), rooms: [] }); b.rooms.push(r); }
+    const open = mapOpen ? rooms.find(r => r.room === mapOpen) : null;
+    if (mapOpen && !open) mapOpen = '';
+    const faces = list => list.length ? `<span class="rph-map-faces">${list.slice(0, 4).map(x => avatarHtml(x.n)).join('')}${list.length > 4 ? `<b>+${list.length - 4}</b>` : ''}</span>` : '';
+    const plan = settings.mapsMode !== 'list' && rooms.length > 0;
+    const html = `<div class="rph-apphead maps"><button type="button" class="rph-tbtn" data-act="home" aria-label="${escapeHtml(t('lk_home'))}" data-focus><i class="fa-solid fa-chevron-left" aria-hidden="true"></i></button><b>${escapeHtml(t('app_maps'))}</b>${rooms.length ? `<button type="button" class="rph-tbtn" data-map="mode" aria-label="${escapeHtml(t(plan ? 'map_as_list' : 'map_as_plan'))}" title="${escapeHtml(t(plan ? 'map_as_list' : 'map_as_plan'))}"><i class="fa-solid ${plan ? 'fa-list' : 'fa-map-location-dot'}" aria-hidden="true"></i></button>` : '<span class="rph-tbtn-gap"></span>'}</div>
+        ${plan ? `<div class="rph-appbody rph-map plan">
+            ${mapPlanHtml(rooms, cur, where)}
+            <div class="rph-plan-ctl"><button type="button" class="rph-tbtn" data-map="zin" aria-label="${escapeHtml(t('map_zin'))}"><i class="fa-solid fa-plus" aria-hidden="true"></i></button><button type="button" class="rph-tbtn" data-map="zout" aria-label="${escapeHtml(t('map_zout'))}"><i class="fa-solid fa-minus" aria-hidden="true"></i></button>${cur ? `<button type="button" class="rph-tbtn" data-map="me" aria-label="${escapeHtml(t('map_me'))}"><i class="fa-solid fa-location-crosshairs" aria-hidden="true"></i></button>` : ''}</div>
+            ${cur || where.length ? `<div class="rph-plan-bar">${cur ? `<button type="button" class="rph-plan-here" data-map="me"><i class="fa-solid fa-location-dot" aria-hidden="true"></i><span><small>${escapeHtml(t('map_here').replace(/[:：]\s*$/, ''))}</small><b>${escapeHtml(cur.room)}</b></span></button>` : ''}${where.filter(x => x.kind === 'room' && x.room).slice(0, 8).map(x => `<button type="button" class="rph-plan-who" data-map="find" data-room="${escapeHtml(x.room)}" aria-label="${escapeHtml(x.n + ' · ' + x.room)}">${avatarHtml(x.n)}</button>`).join('')}</div>` : ''}
+        </div>` : `<div class="rph-appbody rph-map">
+            ${cur ? `<div class="rph-map-here"><i class="fa-solid fa-location-crosshairs" aria-hidden="true"></i><span>${escapeHtml(t('map_here'))}<b>${escapeHtml(cur.room)}</b>${cur.block ? `<small>${escapeHtml(cur.block)}</small>` : ''}</span></div>` : ''}
+            ${where.length ? `<div class="rph-card-h">${escapeHtml(t('map_who'))}</div><ul class="rph-rel-list rph-map-who">${where.map(x => `<li>${avatarHtml(x.n)}<span><b>${escapeHtml(x.n)}</b><small>${escapeHtml(x.kind === 'you' ? t('map_with_you') : x.room || x.location || x.text || t('map_unknown'))}${x.doing ? ' · ' + escapeHtml(clip(x.doing, 70)) : ''}</small></span></li>`).join('')}</ul>` : ''}
+            ${blocks.map(b => `<div class="rph-card-h">${escapeHtml(b.label || t('app_maps'))}</div><div class="rph-map-rooms">${b.rooms.map(r => `<button type="button" class="rph-map-room${r.locked ? ' locked' : ''}${cur && cur.room === r.room ? ' here' : ''}" data-map="open" data-room="${escapeHtml(r.room)}"${r.locked ? ` aria-label="${escapeHtml(r.room + ' · ' + t('map_locked'))}"` : ''}>
+                <i class="fa-solid ${r.locked ? 'fa-lock' : cur && cur.room === r.room ? 'fa-location-dot' : r.trial ? 'fa-shield-halved' : 'fa-door-open'}" aria-hidden="true"></i><span>${escapeHtml(r.room)}</span>${faces(at(r.room))}
+            </button>`).join('')}</div>`).join('') || `<div class="rph-fd-off"><i class="fa-solid fa-map" aria-hidden="true"></i><p>${escapeHtml(t('map_empty'))}</p></div>`}
+        </div>`}
+        ${open ? `<div class="rph-map-sheet" role="dialog" aria-modal="true" tabindex="-1" aria-label="${escapeHtml(open.room)}">
+            <div class="rph-gal-top"><button type="button" class="rph-tbtn" data-map="close" aria-label="${escapeHtml(t('gal_close'))}"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button><span><b>${escapeHtml(open.room)}</b><small>${escapeHtml([open.location, open.block].filter(Boolean).join(' · '))}</small></span></div>
+            <div class="rph-map-pic" data-room="${escapeHtml(open.room)}"><i class="fa-solid fa-image" aria-hidden="true"></i></div>
+            <div class="rph-map-sheet-body">
+                ${at(open.room).length ? `<ul class="rph-rel-list">${at(open.room).map(x => `<li>${avatarHtml(x.n)}<span><b>${escapeHtml(x.n)}</b>${x.doing ? `<small>${escapeHtml(clip(x.doing, 120))}</small>` : ''}</span></li>`).join('')}</ul>` : `<p class="rph-card-p">${escapeHtml(t(open.locked ? 'map_locked' : 'map_nobody'))}</p>`}
+                ${!open.locked ? (mapShare ? `<div class="rph-card-h">${escapeHtml(t('map_share_to'))}</div><div class="rph-map-share">${conversations().map(c => `<button type="button" class="rph-gal-chip" data-map="send" data-id="${escapeHtml(c.id)}">${escapeHtml(contactLabel(c.id))}</button>`).join('') || `<p class="rph-card-p">${escapeHtml(t('wg_nobody'))}</p>`}</div>`
+                    : `<button type="button" class="rph-gbtn main" data-map="share"><i class="fa-solid fa-location-arrow" aria-hidden="true"></i> ${escapeHtml(t('map_share'))}</button>`) : ''}
+            </div>
+        </div>` : ''}`;
+    if (box.dataset.sig === html) return;
+    const sc = box.querySelector('.rph-appbody'); const top = sc ? sc.scrollTop : 0;
+    box.innerHTML = html; box.dataset.sig = html;
+    const nsc = box.querySelector('.rph-appbody'); if (nsc) nsc.scrollTop = top;
+    wireMap(box);
+    const sheet = box.querySelector('.rph-map-sheet');
+    if (sheet) {
+        sheet.focus({ preventScroll: true });
+        const pic = sheet.querySelector('.rph-map-pic');
+        if (m && m.roomImage) m.roomImage(open.room).then(u => { const ok = typeof u === 'string' && (/^data:image\//i.test(u) || /^https?:\/\//i.test(u)); if (ok && pic.isConnected) { const im = new Image(); im.alt = ''; im.className = 'rph-img'; im.src = u; pic.replaceChildren(im); pic.classList.add('has'); } }).catch(() => { });
+    }
+}
+function onMapsClick(e) {
+    const el = e.target.closest('[data-map]');
+    if (!el) return;
+    const a = el.dataset.map;
+    const svg = document.querySelector('#rph-layer .rph-plan');
+    if (a === 'open' && mapDragged && el.closest('.rph-plan')) { mapDragged = false; return; }   // the end of a drag is not a tap
+    if (a === 'mode') { settings.mapsMode = settings.mapsMode === 'list' ? 'map' : 'list'; saveSettings(); renderBubbles(); return; }
+    if (a === 'zin' || a === 'zout') { zoomMap(svg, a === 'zin' ? 1 / 1.35 : 1.35); return; }
+    if (a === 'me') { let c = null; try { c = mapBridge()?.getCurrent(); } catch (er) { c = null; } if (c) centerMapOn(svg, c.room); return; }
+    if (a === 'find') { centerMapOn(svg, el.dataset.room); return; }
+    if (a === 'open') { mapOpen = el.dataset.room; mapShare = false; }
+    else if (a === 'close') { mapOpen = ''; mapShare = false; }
+    else if (a === 'share') { mapShare = true; }
+    else if (a === 'send') {
+        const room = mapOpen, id = el.dataset.id;
+        const r = (mapBridge()?.listRooms() || []).find(x => x.room === room);
+        if (!r) return;
+        pushRaw(id, { who: 'user', name: name1 || 'You', text: `[${t('map_shared_tag')}: ${[r.room, r.location].filter(Boolean).join(', ')}]`, ts: Date.now() });
+        saveSettings(); toastr.info(t('map_sent', { name: contactLabel(id) }));
+        mapOpen = ''; mapShare = false;
+        openContact(id);
+        return;
+    }
+    else return;
+    renderBubbles();
+}
+
+/* ============================================================
+   MAIL (2.1.0) — now and then (off until switched on, at most once a
+   day, never in quiet hours) a letter from someone of this world: an
+   invitation, a bill, a notice, a document, an anonymous letter. Read,
+   mark, delete. One request per letter.
+   ============================================================ */
+const MAIL_PROMPT = `Write one letter or e-mail that {{user}} receives in this story world from someone they know or from an institution of this world: an invitation, a bill or receipt, an official notice, a document, or an anonymous letter — whatever fits the setting and the moment. Never invent big plot events; never decide anything for {{user}}. Write in {{lang}}.
+Output strictly JSON: {"from":"","subject":"","text":"","kind":"invitation|bill|notice|document|anonymous|personal"}`;
+const MAIL_KINDS = { invitation: 'fa-envelope-open-text', bill: 'fa-receipt', notice: 'fa-stamp', document: 'fa-file-lines', anonymous: 'fa-user-secret', personal: 'fa-envelope' };
+let mailOpen = '', mailBusy = false;
+async function makeMail(manual) {
+    if (mailBusy || !apiKey()) { if (manual && !apiKey()) toastr.warning(t('nokey')); return; }
+    mailBusy = true; renderBubbles();
+    try {
+        const people = phonePeople();
+        const usr = [timeContext(0), worldLine(), diaryBlock(people.slice(0, 3), null, true), mainChatContext(people, settings.mainChatMessages)].filter(Boolean).join('\n\n') || '[No story context yet.]';
+        const data = readJsonLoose(await feedCall(MAIL_PROMPT.split('{{user}}').join(name1 || 'the player').split('{{lang}}').join(genLang()), usr));
+        const text = cleanLine(data && data.text, 2000);
+        if (!text) { if (manual) toastr.warning(t('feed_bad')); return; }
+        const kind = MAIL_KINDS[data.kind] ? data.kind : 'personal';
+        settings.mail.push({ id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), from: cleanLine(data.from, 60) || t('unk_unknown'), subject: cleanLine(data.subject, 100) || '', text, kind, ts: Date.now(), read: false });
+        if (settings.mail.length > 80) settings.mail.splice(0, settings.mail.length - 80);
+        settings.mailLast = Date.now();
+        saveSettings(); renderButton();
+        notify(cleanLine(data.from, 60) || t('app_mail'), cleanLine(data.subject, 100) || text.slice(0, 80), null);
+    } catch (e) { if (manual) toastr.warning(e && e.name === 'TimeoutError' ? t('timeout') : t('err')); console.warn('[Phone] mail failed', e); }
+    finally { mailBusy = false; renderBubbles(); }
+}
+function mailTick() {
+    if (!settings.enabled || !settings.mailOn || !apiKey() || mailBusy || !isPhoneSkin()) return;
+    const hour = new Date().getHours(), qf = settings.quietFrom, qt = settings.quietTo;
+    if (qf !== qt && (qf < qt ? (hour >= qf && hour < qt) : (hour >= qf || hour < qt))) return;
+    if (Date.now() - (settings.mailLast || 0) < 24 * 3600e3) return;
+    if (Math.random() > 1 / 45) return;
+    makeMail(false);
+}
+function renderMailApp(box) {
+    const list = settings.mail.slice().reverse();
+    const open = mailOpen ? settings.mail.find(x => x.id === mailOpen) : null;
+    if (mailOpen && !open) mailOpen = '';
+    const html = `<div class="rph-apphead mail"><button type="button" class="rph-tbtn" data-act="home" aria-label="${escapeHtml(t('lk_home'))}" data-focus><i class="fa-solid fa-chevron-left" aria-hidden="true"></i></button><b>${escapeHtml(t('app_mail'))}</b>
+        <button type="button" class="rph-tbtn" data-mail="fetch" aria-label="${escapeHtml(t('mail_fetch'))}" title="${escapeHtml(t('mail_fetch'))}"${!settings.mailOn || mailBusy ? ' disabled' : ''}><i class="fa-solid ${mailBusy ? 'fa-spinner fa-spin' : 'fa-rotate-right'}" aria-hidden="true"></i></button></div>
+        <div class="rph-appbody rph-mail">
+            ${!settings.mailOn ? `<div class="rph-fd-off"><i class="fa-solid fa-envelope" aria-hidden="true"></i><b>${escapeHtml(t('mail_off_h'))}</b><p>${escapeHtml(t('mail_off_p'))}</p><button type="button" class="rph-gbtn main" data-mail="on">${escapeHtml(t('mail_turn_on'))}</button></div>` : ''}
+            ${list.map(x => `<button type="button" class="rph-mail-row${x.read ? '' : ' unread'}" data-mail="open" data-id="${escapeHtml(x.id)}">
+                <i class="fa-solid ${MAIL_KINDS[x.kind] || MAIL_KINDS.personal}" aria-hidden="true"></i>
+                <span><b>${escapeHtml(x.from)}</b><em>${escapeHtml(x.subject || t('mail_nosubj'))}</em><small>${escapeHtml(x.text.slice(0, 80))}</small></span>
+                <small class="rph-mail-when">${escapeHtml(whenShort(x.ts))}</small>
+            </button>`).join('')}
+            ${settings.mailOn && !list.length ? `<div class="rph-fd-off"><i class="fa-solid fa-envelope-open" aria-hidden="true"></i><p>${escapeHtml(t(mailBusy ? 'feed_loading' : 'mail_empty'))}</p></div>` : ''}
+        </div>
+        ${open ? `<div class="rph-map-sheet rph-mail-sheet" role="dialog" aria-modal="true" tabindex="-1" aria-label="${escapeHtml(open.subject || open.from)}">
+            <div class="rph-gal-top"><button type="button" class="rph-tbtn" data-mail="close" aria-label="${escapeHtml(t('gal_close'))}"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button><span><b>${escapeHtml(open.subject || t('mail_nosubj'))}</b><small>${escapeHtml(open.from)} · ${escapeHtml(whenShort(open.ts))}</small></span></div>
+            <div class="rph-map-sheet-body"><div class="rph-mail-paper">${escapeHtml(open.text)}</div>
+                <div class="rph-grp-btns"><button type="button" class="rph-gbtn quiet" data-mail="unread">${escapeHtml(t('mail_unread'))}</button><span class="rph-grp-gap"></span><button type="button" class="rph-gbtn danger" data-mail="del">${escapeHtml(t('grp_del'))}</button></div>
+            </div>
+        </div>` : ''}`;
+    if (box.dataset.sig === html) return;
+    box.innerHTML = html; box.dataset.sig = html;
+    box.querySelector('.rph-mail-sheet')?.focus({ preventScroll: true });
+}
+function onMailClick(e) {
+    const el = e.target.closest('[data-mail]');
+    if (!el || el.disabled) return;
+    const a = el.dataset.mail;
+    if (a === 'on') { settings.mailOn = true; saveSettings(); $('#rph-mail-on').prop('checked', true); makeMail(true); return; }
+    if (a === 'fetch') { makeMail(true); return; }
+    if (a === 'open') { mailOpen = el.dataset.id; const m = settings.mail.find(x => x.id === mailOpen); if (m && !m.read) { m.read = true; saveSettings(); renderButton(); } }
+    else if (a === 'close') mailOpen = '';
+    else if (a === 'unread') { const m = settings.mail.find(x => x.id === mailOpen); if (m) { m.read = false; saveSettings(); } mailOpen = ''; }
+    else if (a === 'del') {
+        if (!el.classList.contains('armed')) { el.classList.add('armed'); el.textContent = t('grp_del_sure'); clearTimeout(el._d); el._d = setTimeout(() => { if (el.isConnected) { el.classList.remove('armed'); el.textContent = t('grp_del'); } }, 3000); return; }
+        settings.mail = settings.mail.filter(x => x.id !== mailOpen); mailOpen = ''; saveSettings();
+    } else return;
+    renderBubbles();
+}
+
+/* ============================================================
+   MUSIC (2.1.0) — each person's playlist: 3 to 5 songs they would
+   love (titles and artists only — never lyrics), found on a button,
+   one request per person, kept until their card changes. A song can
+   be looked up on YouTube or shared into their chat.
+   ============================================================ */
+const SONGS_PROMPT = `List 3 to 5 songs {{char}} would truly love — real songs if their world is ours, or songs of their own world if it is not — that fit their taste, mood and life. Title and artist only, never lyrics. Write in {{lang}} where the songs are of their world.
+Output strictly JSON: {"songs":[{"title":"","artist":"","why":""}]}`;
+let musicWho = '', musicBusy = '';
+async function findSongs(n) {
+    if (musicBusy || !apiKey()) { if (!apiKey()) toastr.warning(t('nokey')); return; }
+    musicBusy = n; renderBubbles();
+    try {
+        const data = readJsonLoose(await feedCall(SONGS_PROMPT.split('{{char}}').join(n).split('{{lang}}').join(genLang()), await cardOf(n)));
+        const list = (data && Array.isArray(data.songs) ? data.songs : []).map(x => ({ title: cleanLine(x && x.title, 80), artist: cleanLine(x && x.artist, 60) || '', why: cleanLine(x && x.why, 140) || '' })).filter(x => x.title).slice(0, 5);
+        if (!list.length) { toastr.warning(t('feed_bad')); return; }
+        settings.songs[n] = { list, stamp: cardStamp(n) || textHash(n) };
+        saveSettings();
+    } catch (e) { toastr.warning(e && e.name === 'TimeoutError' ? t('timeout') : t('err')); console.warn('[Phone] songs failed', e); }
+    finally { musicBusy = ''; renderBubbles(); }
+}
+function renderMusicApp(box) {
+    const people = phonePeople();
+    if (!musicWho || !people.includes(musicWho)) musicWho = people[0] || '';
+    const pl = musicWho ? settings.songs[musicWho] : null;
+    const fresh = pl && pl.stamp === (cardStamp(musicWho) || textHash(musicWho));
+    const html = `<div class="rph-apphead music"><button type="button" class="rph-tbtn" data-act="home" aria-label="${escapeHtml(t('lk_home'))}" data-focus><i class="fa-solid fa-chevron-left" aria-hidden="true"></i></button><b>${escapeHtml(t('app_music'))}</b><span class="rph-tbtn-gap"></span></div>
+        <div class="rph-appbody rph-music">
+            ${people.length ? `<div class="rph-gal-chips">${people.map(n => `<button type="button" class="rph-gal-chip" data-mus="who" data-v="${escapeHtml(n)}" aria-pressed="${n === musicWho}">${escapeHtml(n)}</button>`).join('')}</div>` : `<div class="rph-fd-off"><i class="fa-solid fa-music" aria-hidden="true"></i><p>${escapeHtml(t('wg_nobody'))}</p></div>`}
+            ${musicWho ? `<div class="rph-mus-head">${avatarHtml(musicWho)}<span><b>${escapeHtml(t('mus_of', { name: musicWho }))}</b><small>${escapeHtml(pl ? t('mus_n', { n: pl.list.length }) : t('mus_none'))}</small></span></div>
+            ${pl ? `<ol class="rph-mus-list">${pl.list.map((x, i) => `<li><span class="rph-mus-num">${i + 1}</span><span class="rph-mus-t"><b>${escapeHtml(x.title)}</b><small>${escapeHtml(x.artist)}</small>${x.why ? `<em>${escapeHtml(x.why)}</em>` : ''}</span>
+                <a class="rph-mus-yt" href="https://www.youtube.com/results?search_query=${encodeURIComponent((x.title + ' ' + x.artist).trim())}" target="_blank" rel="noopener noreferrer" aria-label="${escapeHtml(t('mus_yt', { t: x.title }))}" title="${escapeHtml(t('mus_yt', { t: x.title }))}"><i class="fa-brands fa-youtube" aria-hidden="true"></i></a>
+                <button type="button" class="rph-mus-share" data-mus="share" data-i="${i}" aria-label="${escapeHtml(t('mus_share', { name: musicWho }))}" title="${escapeHtml(t('mus_share', { name: musicWho }))}"><i class="fa-solid fa-share" aria-hidden="true"></i></button></li>`).join('')}</ol>` : ''}
+            ${!pl || !fresh ? `<button type="button" class="rph-gbtn quiet" data-mus="find" title="${escapeHtml(t('cost_one'))}"${musicBusy ? ' disabled' : ''}><i class="fa-solid fa-music" aria-hidden="true"></i> ${escapeHtml(t(musicBusy === musicWho ? 'mus_finding' : pl ? 'mus_refresh' : 'mus_find'))}</button>` : ''}` : ''}
+        </div>`;
+    if (box.dataset.sig !== html) { box.innerHTML = html; box.dataset.sig = html; }
+}
+function onMusicClick(e) {
+    const el = e.target.closest('[data-mus]');
+    if (!el || el.disabled) return;
+    const a = el.dataset.mus;
+    if (a === 'who') musicWho = el.dataset.v;
+    else if (a === 'find') { findSongs(musicWho); return; }
+    else if (a === 'share') {
+        const x = settings.songs[musicWho]?.list?.[+el.dataset.i]; if (!x) return;
+        const id = contactList().includes(musicWho) ? musicWho : (contactList().find(c => contactMembers(c).includes(musicWho)) || musicWho);
+        settings.active[id] = true;
+        pushRaw(id, { who: 'user', name: name1 || 'You', text: `[${t('mus_tag')}: ${x.title}${x.artist ? ' — ' + x.artist : ''}]`, ts: Date.now() });
+        saveSettings(); toastr.info(t('map_sent', { name: contactLabel(id) }));
+        openContact(id); return;
+    } else return;
+    renderBubbles();
+}
+
+/* ============================================================
+   SHOP (2.1.0) — gifts for the phone's own sparks (10 a day while
+   the phone is used, up to 300; Vendors' coins are never touched).
+   The window is written for this world on a button, once a day, one
+   request; prices are kept between 5 and 200 whatever the model says.
+   A bought gift goes into the chat as «[gift: …]» and they answer it.
+   ============================================================ */
+const SHOP_PROMPT = `Write a small shop catalogue that fits this story world and its setting: 6 to 8 gifts {{user}} could buy and send to someone — flowers, sweets, jewellery, books, trinkets, clothes or whatever this world sells. Short names, one line each, and a fair price in {{currency}} between 5 and 200. Never invent plot events. Write in {{lang}}.
+Output strictly JSON: {"items":[{"name":"","desc":"","price":0}]}`;
+let shopBusy = false, shopBuying = '';
+function dailySparks() {
+    const today = ymd(new Date());
+    if (settings.walletDay === today) return;
+    const first = !settings.walletDay;
+    settings.walletDay = today;
+    if (!first) settings.wallet = Math.min(WALLET_CAP, (settings.wallet || 0) + WALLET_DAILY);
+    saveSettings();
+}
+async function makeShop() {
+    if (shopBusy) return;
+    if (!apiKey()) { toastr.warning(t('nokey')); return; }
+    shopBusy = true; renderBubbles();
+    try {
+        const usr = [worldLine(), mainChatContext(phonePeople(), Math.min(6, settings.mainChatMessages))].filter(Boolean).join('\n\n') || '[No story context yet.]';
+        const data = readJsonLoose(await feedCall(SHOP_PROMPT.split('{{user}}').join(name1 || 'the player').split('{{currency}}').join(t('coin_many')).split('{{lang}}').join(genLang()), usr));
+        const items = (data && Array.isArray(data.items) ? data.items : []).map((x, i) => ({ id: Date.now().toString(36) + i, name: cleanLine(x && x.name, 60), desc: cleanLine(x && x.desc, 140) || '', price: Math.max(5, Math.min(200, Math.round(Number(x && x.price) || 0) || 20)) })).filter(x => x.name).slice(0, 8);
+        if (!items.length) { toastr.warning(t('feed_bad')); return; }
+        settings.shop = { items, day: ymd(new Date()) };
+        saveSettings();
+    } catch (e) { toastr.warning(e && e.name === 'TimeoutError' ? t('timeout') : t('err')); console.warn('[Phone] shop failed', e); }
+    finally { shopBusy = false; renderBubbles(); }
+}
+function renderShopApp(box) {
+    dailySparks();
+    const items = settings.shop.items;
+    const fresh = settings.shop.day === ymd(new Date());
+    const buying = shopBuying ? items.find(x => x.id === shopBuying) : null;
+    if (shopBuying && !buying) shopBuying = '';
+    const people = conversations().filter(c => !isGroup(c.id) && !isUnknown(c.id));
+    const html = `<div class="rph-apphead shop"><button type="button" class="rph-tbtn" data-act="home" aria-label="${escapeHtml(t('lk_home'))}" data-focus><i class="fa-solid fa-chevron-left" aria-hidden="true"></i></button><b>${escapeHtml(t('app_shop'))}</b><span class="rph-coins" aria-label="${escapeHtml(t('coin_balance', { n: settings.wallet }))}"><i class="fa-solid fa-star-of-life" aria-hidden="true"></i>${settings.wallet}</span></div>
+        <div class="rph-appbody rph-shop">
+            <p class="rph-card-p">${escapeHtml(t('shop_tip', { d: WALLET_DAILY, cap: WALLET_CAP }))}</p>
+            ${items.length ? `<div class="rph-shop-grid">${items.map(x => `<div class="rph-shop-item">
+                <b>${escapeHtml(x.name)}</b>${x.desc ? `<small>${escapeHtml(x.desc)}</small>` : ''}
+                <button type="button" class="rph-gbtn ${settings.wallet >= x.price ? 'main' : 'quiet'}" data-shop="buy" data-id="${escapeHtml(x.id)}"${settings.wallet >= x.price ? '' : ' disabled'} aria-label="${escapeHtml(t('shop_buy', { name: x.name, n: x.price }))}"><i class="fa-solid fa-star-of-life" aria-hidden="true"></i> ${x.price}</button>
+            </div>`).join('')}</div>` : `<div class="rph-fd-off"><i class="fa-solid fa-bag-shopping" aria-hidden="true"></i><p>${escapeHtml(t('shop_empty'))}</p></div>`}
+            <button type="button" class="rph-gbtn quiet" data-shop="refresh" title="${escapeHtml(t('cost_one'))}"${shopBusy || fresh ? ' disabled' : ''}>${escapeHtml(t(shopBusy ? 'shop_busy' : fresh ? 'shop_fresh' : 'shop_refresh'))}</button>
+        </div>
+        ${buying ? `<div class="rph-map-sheet" role="dialog" aria-modal="true" tabindex="-1" aria-label="${escapeHtml(t('shop_to'))}">
+            <div class="rph-gal-top"><button type="button" class="rph-tbtn" data-shop="close" aria-label="${escapeHtml(t('gal_close'))}"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button><span><b>${escapeHtml(buying.name)}</b><small>${escapeHtml(t('shop_cost', { n: buying.price }))}</small></span></div>
+            <div class="rph-map-sheet-body"><div class="rph-card-h">${escapeHtml(t('shop_to'))}</div>
+                ${people.length ? `<div class="rph-map-share">${people.map(c => `<button type="button" class="rph-gal-chip" data-shop="give" data-to="${escapeHtml(c.id)}">${escapeHtml(contactLabel(c.id))}</button>`).join('')}</div>` : `<p class="rph-card-p">${escapeHtml(t('wg_nobody'))}</p>`}
+            </div>
+        </div>` : ''}`;
+    if (box.dataset.sig === html) return;
+    box.innerHTML = html; box.dataset.sig = html;
+    box.querySelector('.rph-map-sheet')?.focus({ preventScroll: true });
+}
+// (2.1.2, approved) a gift gets an answer at once — before, they stayed silent until the player wrote
+const GIFT_LINE = `[{{user}} just sent you a gift: {{gift}}. React in character.]`;
+async function giftReply(to, it) {
+    if (!apiKey() || busy || settings.blocked[to]) return;
+    const names = contactMembers(to);
+    if (!names.length) return;
+    const rq = beginRequest(to); renderBubbles();
+    try {
+        const line = GIFT_LINE.split('{{user}}').join(name1 || 'the player').split('{{gift}}').join(it.name + (it.desc ? ' — ' + it.desc : ''));
+        const msgs = await generateReply(names, '\n' + line, false, to);
+        if (isCurrent(rq)) { if (!msgs.length) toastr.info(t('err')); await deliverReply(to, msgs, rq); }
+    } catch (e) { requestFailed(e, rq, 'reply'); }
+    if (!isCurrent(rq)) return;
+    finishRequest(rq); scrollOffset = 0; renderBubbles();
+}
+function onShopClick(e) {
+    const el = e.target.closest('[data-shop]');
+    if (!el || el.disabled) return;
+    const a = el.dataset.shop;
+    if (a === 'refresh') { makeShop(); return; }
+    if (a === 'buy') shopBuying = el.dataset.id;
+    else if (a === 'close') shopBuying = '';
+    else if (a === 'give') {
+        const it = settings.shop.items.find(x => x.id === shopBuying), to = el.dataset.to;
+        if (!it || settings.wallet < it.price) { shopBuying = ''; renderBubbles(); return; }
+        settings.wallet -= it.price;
+        settings.shop.items = settings.shop.items.filter(x => x.id !== it.id);   // bought: it leaves the window
+        shopBuying = '';
+        pushRaw(to, { who: 'user', name: name1 || 'You', text: `[${t('shop_tag')}: ${it.name}${it.desc ? ' — ' + it.desc : ''}]`, ts: Date.now() });
+        saveSettings();
+        toastr.success(t('shop_sent', { name: contactLabel(to) }));
+        openContact(to);
+        giftReply(to, it);
+        return;
+    } else return;
+    renderBubbles();
+}
+
 function renderPhoneClock() {
     const el = document.querySelector('#rph-layer .rph-clock');
     if (!el) return;
@@ -2768,30 +5180,78 @@ function currentThread() {
 }
 
 // contact strip: one avatar per conversation, unread dot, click switches
+// BUG FIX (2.1.1): on a narrower window the floating bubbles lay on top of Tavern's own chat
+// column. The column is measured now and the bubbles keep to the free space beside it
+// (never narrower than 200 px — below that there is no room anywhere, and a phone skin fits better).
+let arcFitT = 0;
+function arcFit(layer) {
+    const sheld = document.getElementById('sheld');
+    const r = sheld && sheld.getBoundingClientRect();
+    const right = Math.max(0, Number(settings.offsetRight) || 0);
+    const full = window.innerWidth <= 900 ? 250 : 330;
+    let w = full;
+    if (r && r.width && r.right < window.innerWidth) w = Math.max(200, Math.min(full, Math.floor(window.innerWidth - r.right - right - 12)));
+    const px = w === full ? '' : w + 'px';
+    if (layer.style.width !== px) layer.style.width = px;
+    layer.classList.toggle('rph-tight', !!r && r.width > 0 && window.innerWidth - r.right - right - 12 < 200);
+}
+window.addEventListener('resize', () => { clearTimeout(arcFitT); arcFitT = setTimeout(() => { const l = document.getElementById('rph-layer'); if (l && !isPhoneSkin()) arcFit(l); }, 150); }, { passive: true });
+
+// (2.1.4) where they are and what they do, from the Map — «в Пекарне · печёт хлеб». No request:
+// the Map already knows. Empty when the Map is off or does not know them.
+function statusOf(name) {
+    if (!name || isGroup(name) || isUnknown(name)) return '';
+    let w = null;
+    try { w = mapBridge()?.whereIs(name) || null; } catch (e) { w = null; }
+    if (!w) return '';
+    const doing = w.doing ? clip(String(w.doing), 40) : '';
+    if (w.kind === 'you') return [t('st_near'), doing].filter(Boolean).join(' · ');
+    const where = w.room || w.location || (w.text ? clip(String(w.text), 40) : '');
+    return [where, doing].filter(Boolean).join(' · ');
+}
 function renderTabs() {
     const box = document.getElementById('rph-tabs');
     if (!box) return;
-    const list = contactList();
     const cur = currentContact();
+    const list = contactList().filter(id => shownInLists(id) || id === cur);
     if (list.length < 2) { if (box.innerHTML) { box.innerHTML = ''; lastTabSig = ''; } box.style.display = 'none'; return; }
     box.style.display = '';
-    const tabSig = list.join('|') + '::' + cur + '::' + list.map(id => unreadOf(id)).join(',') + '::' + list.map(id => isGroup(id) ? '' : avaKey(id)).join(',');
+    // (2.1.1) the strip twitched on every click: the open contact or a badge changing rebuilt
+    // all the avatars (images reloaded, the scroll jumped). Only a new list or new faces
+    // rebuild now; the ring and the badges are changed in place.
+    const shapeSig = list.join('|') + '::' + list.map(id => isGroup(id) ? contactLabel(id) + groupMemberNames(id).slice(0, 3).join('+') : avaKey(id)).join(',');
+    const tabSig = shapeSig + '::' + cur + '::' + list.map(id => unreadOf(id)).join(',');
     if (tabSig === lastTabSig) return;   // nothing changed — don't touch the DOM
+    const prevCur = box.querySelector('.rph-tab.on')?.dataset.id;
+    if (lastTabSig.startsWith(shapeSig + '::') && box.children.length === list.length) {
+        lastTabSig = tabSig;
+        box.querySelectorAll('.rph-tab').forEach(el => {
+            const id = el.dataset.id, un = unreadOf(id);
+            el.classList.toggle('on', id === cur);
+            let b = el.querySelector('.rph-badge');
+            if (!un) { b?.remove(); return; }
+            if (!b) { b = document.createElement('span'); b.className = 'rph-badge'; el.appendChild(b); }
+            const txt = un > 9 ? '9+' : String(un);
+            if (b.textContent !== txt) b.textContent = txt;
+        });
+        if (prevCur === cur) return;
+    } else {
     lastTabSig = tabSig;
     box.innerHTML = list.map(id => {
         const un = unreadOf(id);
         const label = contactLabel(id);
-        const ava = isGroup(id) ? `<span class="rph-ava rph-ava-npc" style="background:#3c5a8a"><i class="fa-solid fa-users"></i></span>` : avatarHtml(id);
+        const ava = contactAva(id);
         return `<div class="rph-tab ${id === cur ? 'on' : ''}" data-id="${escapeHtml(id)}" title="${escapeHtml(label)}">
             ${ava}${un ? `<span class="rph-badge">${un > 9 ? '9+' : un}</span>` : ''}
         </div>`;
     }).join('');
     box.querySelectorAll('.rph-tab').forEach(el => el.onclick = () => openContact(el.dataset.id));
+    }
     // a long contact list scrolls: make sure the open one is in view
     const on = box.querySelector('.rph-tab.on');
     if (on && box.scrollWidth > box.clientWidth) {
-        const left = on.offsetLeft - (box.clientWidth / 2) + (on.offsetWidth / 2);
-        box.scrollLeft = Math.max(0, left);
+        const left = Math.max(0, on.offsetLeft - (box.clientWidth / 2) + (on.offsetWidth / 2));
+        if (Math.abs(box.scrollLeft - left) > 2) box.scrollTo({ left, behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
     }
 }
 
@@ -2809,13 +5269,19 @@ function renderBubbles(force) {
     if (wall) applyWallpaper(layer);
     if (document.body.dataset.rphSkin !== settings.skin) document.body.dataset.rphSkin = settings.skin || 'arc';   // roster/diary follow the skin
     layer.style.display = settings.enabled && !phoneTucked() ? '' : 'none';
-    if (phone) { if (!layer.classList.contains('dragging')) placePhone(layer); }
+    if (phone) { if (!layer.classList.contains('dragging')) placePhone(layer); renderView(layer); }
+    else if (layer.dataset.view) { delete layer.dataset.view; parkRoster(); }
     else {
-        layer.style.width = ''; layer.style.height = '';
+        layer.style.height = '';
         layer.style.right = settings.offsetRight + 'px';
         layer.style.top = settings.offsetTop + 'px';
+        arcFit(layer);
     }
     if (!settings.enabled) return;
+    /* OPTIMIZATION (2.1.0): a phone put away, or showing its home screen / an app, does not rebuild the
+       hidden chat column (that was ~60 DOM changes per redraw, every minute and on every tap). The chat is
+       drawn afresh the moment it is shown again. */
+    if (phoneTucked() || (phone && (call || phoneLocked || settings.phoneView !== 'chat'))) { if (phone && !phoneTucked()) renderPhoneClock(); lastSig = ''; return; }
 
     renderTabs();
     const th = currentThread();
@@ -2834,7 +5300,7 @@ function renderBubbles(force) {
     const lastTs = th.length ? th[th.length - 1].ts : 0;
     const sig = [cur, th.length, lastTs, busy, scrollOffset, settings.bubbleWidth, settings.arcDepth,
         settings.visibleCount, settings.fade, settings.offsetRight, settings.offsetTop, settings.language,
-        settings.skin, settings.phoneSize, phoneWindow, genRev, !!imgCfg().enabled, busyFor, editRev, characters.length].join('|');
+        settings.skin, settings.phoneSize, phoneWindow, genRev, !!imgCfg().enabled, busyFor, editRev, characters.length, typingName, [...openCalls].join(','), call ? call.started : 0].join('|');
     if (sig === lastSig) {
         // same content: only the "5 min ago" labels age — update them in place
         const labels = stack.querySelectorAll('.rph-time');
@@ -2856,13 +5322,24 @@ function renderBubbles(force) {
     const grp = isGroup(cur) || castNow.length > 0;
     // the dots used to appear in whatever thread was open, even when SOMEONE ELSE was
     // writing (an initiative in the background) — now it says who
-    const typingWho = busy && busyFor && busyFor !== cur ? `<div class="rph-typing-who">${escapeHtml(t('typing_who', { name: contactLabel(busyFor) }))}</div>` : '';
+    const typingWho = busy && busyFor && busyFor !== cur ? `<div class="rph-typing-who">${escapeHtml(t('typing_who', { name: contactLabel(busyFor) }))}</div>`
+        : busy && typingName && busyFor === cur ? `<div class="rph-typing-who">${escapeHtml(t('typing_who', { name: typingName }))}</div>` : '';
     const fade = Math.max(0, Math.min(90, settings.fade)) / 100;
     /* OPTIMIZATION (2.0.0). The whole column used to be rebuilt with innerHTML on every
        change — every wheel tick in the arc, every new message — re-parsing every bubble
        and re-decoding every photo. Bubbles are now kept by key: one whose content did not
        change is moved, not rebuilt; only its position style (the arc) is updated. */
     const imgOn = !!imgCfg().enabled;
+    // (2.1.1) a finished call folds into its «Call · 2:15 ▸» line; a tap opens it again.
+    // Display only — the spoken lines stay in the thread and in what they remember.
+    const callSum = new Map(), callLines = new Map();
+    for (let k = 0, prev = 0; k < th.length; k++) {
+        const x = th[k];
+        if (x.call) { prev = x.call; callLines.set(prev, (callLines.get(prev) || 0) + 1); }
+        else { if (prev && x.who !== 'user' && /^\[SYSTEM:/.test(String(x.text || ''))) callSum.set(k, prev); prev = 0; }
+    }
+    const summed = new Set(callSum.values());
+    const folded = m => !!m.call && summed.has(m.call) && !openCalls.has(m.call) && !(call && call.started === m.call);
     const nextNodes = new Map();
     const nodes = slice.map((m, i) => {
         const total = slice.length;
@@ -2902,14 +5379,16 @@ function renderBubbles(force) {
             else inner = photoPlaceholder(cur, m, mine, imgOn) + words;
         } else if (kind.type === 'voice') {
             const vm = voiceMeta(kind.caption + kind.text);
-            inner = `<div class="rph-voice" data-ts="${escapeHtml(m.ts)}"><i class="fa-solid fa-play rph-play"></i>` +
+            inner = `<div class="rph-voice${voiceNowTs === m.ts ? ' playing' : ''}" data-ts="${escapeHtml(m.ts)}"><i class="fa-solid fa-play rph-play"></i>` +
                 `<span class="rph-wave">${vm.bars.map(b => `<i style="height:${b}%"></i>`).join('')}</span>` +
                 `<span class="rph-dur">${vm.dur}</span></div>` +
                 // the spoken words go in quotes under the player; the tag itself is the tone
-                (kind.text ? `<div class="rph-spoken">«${escapeHtml(stripNamePrefix(kind.text, mine ? null : shownName))}»</div>` : '') +
-                (kind.caption ? `<div class="rph-caption">${escapeHtml(kind.caption)}</div>` : '');
+                (() => { const vp = voiceParts(kind); return (vp.words ? `<div class="rph-spoken">«${escapeHtml(stripNamePrefix(vp.words, mine ? null : shownName))}»</div>` : '') +
+                    (vp.tone ? `<div class="rph-caption">${escapeHtml(vp.tone)}</div>` : ''); })();
         } else if (kind.type === 'system') {
-            inner = `<div class="rph-sys">${escapeHtml(kind.text)}</div>`;
+            const S = callSum.get(start + i);
+            inner = S ? `<button type="button" class="rph-sys rph-callsum" data-callfold="${escapeHtml(S)}" aria-expanded="${openCalls.has(S)}" title="${escapeHtml(t(openCalls.has(S) ? 'call_fold' : 'call_unfold', { n: callLines.get(S) || 0 }))}">${escapeHtml(kind.text)}<i class="fa-solid fa-chevron-${openCalls.has(S) ? 'down' : 'right'}" aria-hidden="true"></i></button>`
+                : `<div class="rph-sys">${escapeHtml(kind.text)}</div>`;
         } else if (kind.type === 'note') {
             // a remark on its own is a status line; with words after it, it heads the bubble
             const said = String(kind.caption).toLowerCase();
@@ -2930,7 +5409,7 @@ function renderBubbles(force) {
             ${mine || status ? '' : avatarHtml(shownName)}
             <div class="rph-body">
                 <div class="rph-head">
-                    <span class="rph-name">${escapeHtml(mine ? (name1 || 'You') : shownName)}</span>
+                    <span class="rph-name" title="${escapeHtml(mine ? (name1 || 'You') : shownName)}">${escapeHtml(mine ? (name1 || 'You') : shownName)}</span>
                     <span class="rph-time"></span>
                     ${mine ? `<i class="fa-solid fa-rotate rph-regen" data-ts="${escapeHtml(m.ts)}" title="${escapeHtml(t('regen_title'))}"></i>` : ''}
                     ${status ? '' : acts}
@@ -2942,7 +5421,9 @@ function renderBubbles(force) {
         let el = msgNodes.get(key);
         // animate a bubble only the first time it appears
         const seenKey = `${cur}|${m.ts}`;
-        const fresh = !seenKeys.has(seenKey);
+        // (2.1.5) only a message that just arrived comes in; opening a conversation does not replay
+        // the entrance of thirty old bubbles (the screen twitched) — the column fades in as one instead
+        const fresh = !seenKeys.has(seenKey) && Date.now() - (Number(m.ts) || 0) < 15000;
         if (fresh) {
             seenKeys.add(seenKey);
             if (seenKeys.size > 600) { const it = seenKeys.values(); for (let k = 0; k < 200; k++) seenKeys.delete(it.next().value); }
@@ -2952,7 +5433,7 @@ function renderBubbles(force) {
             el.innerHTML = body;
             el.__body = body;
         }
-        el.className = `rph-msg ${mine ? 'mine' : ''} ${status ? 'sysmsg' : ''} ${kind.type === 'note' ? 'notemsg' : ''} ${grp ? 'grp' : ''} ${fresh ? '' : 'noanim'}${el.querySelector(':scope > .rph-body > .rph-edit') ? ' editing' : ''}`;
+        el.className = `rph-msg ${mine ? 'mine' : ''} ${status ? 'sysmsg' : ''} ${kind.type === 'note' ? 'notemsg' : ''} ${grp ? 'grp' : ''} ${isCallLine(m) ? 'callline' : ''}${folded(m) ? ' callfold' : ''}${grp && !mine && !status ? ' who' + whoHue(shownName) : ''}${grp && !status && sameRun(slice[i - 1], m, shownName, castNow) ? ' cont' : ''} ${fresh ? '' : 'noanim'}${el.querySelector(':scope > .rph-body > .rph-edit') ? ' editing' : ''}`;
         // the arc's bulge, fade and bubble width belong to the arc; a phone lays out by itself
         if (phone) el.removeAttribute('style');
         else el.setAttribute('style', `opacity:${opacity}; transform:translateX(${-bulge.toFixed(1)}px); max-width:${settings.bubbleWidth}px;`);
@@ -2968,6 +5449,11 @@ function renderBubbles(force) {
     all.push(...nodes);
     if (busy) all.push(extra(`<div class="rph-msg typing"><div class="rph-body">${typingWho}<div class="rph-text">•••</div></div><i class="fa-solid fa-xmark rph-cancel" title="${escapeHtml(t('cancel_title'))}"></i></div>`));
     stack.replaceChildren(...all);
+    if (stack.dataset.who !== String(cur)) {
+        const first = stack.dataset.who === undefined;
+        stack.dataset.who = String(cur);
+        if (!first && !matchMedia('(prefers-reduced-motion: reduce)').matches) { stack.classList.remove('swap'); void stack.offsetWidth; stack.classList.add('swap'); }
+    }
 
     hydrateImages(stack, pinBottom);
     if (phone && pinBottom) {
@@ -3025,6 +5511,18 @@ function photoPlaceholder(cur, m, mine, imgOn) {
     }
     return `<div class="rph-photo can-gen" data-ts="${escapeHtml(m.ts)}"><i class="fa-regular fa-image"></i><span class="rph-develop"><i class="fa-solid fa-camera"></i> ${escapeHtml(t('img_develop'))}</span></div>`;
 }
+function isCallLine(m) { return !!(m && m.call); }
+// (2.1.1) group threads: each person keeps one name colour (six per skin, all readable on it),
+// and a second bubble from the same person within five minutes does not repeat the name and face
+function whoHue(name) { let h = 0; for (const ch of String(name || '').toLowerCase()) h = (h * 31 + ch.codePointAt(0)) >>> 0; return h % 6; }
+function sameRun(prev, m, shownName, cast) {
+    if (!prev || prev.who !== m.who || Math.abs(m.ts - prev.ts) > 5 * 60000 || prev.call !== m.call) return false;
+    if (/^\[SYSTEM:/.test(String(prev.text || ''))) return false;
+    if (m.who === 'user') return true;
+    const ns = nestedSender(prev.text, cast);
+    return (ns ? ns.name : prev.name) === shownName;
+}
+const openCalls = new Set();   // finished calls the player unfolded (this session only)
 function msgKey(cur, m) { return cur + '\u0001' + m.ts + '\u0001' + m.who + '\u0001' + m.text + '\u0001' + (m.imgKey || '') + (m.gen ? '\u0001g' : ''); }
 function msgByTs(cur, ts, type) {
     return threadOf(cur).find(x => x.ts === ts && (!type || classify(x.text).type === type)) || null;
@@ -3125,6 +5623,8 @@ function onStackClick(e) {
     if (cx) { e.stopPropagation(); cancelRequest(); return; }
     const rg = tgt.closest('.rph-regen');
     if (rg) { e.stopPropagation(); regenerateAfter(Number(rg.dataset.ts)); return; }
+    const cf = tgt.closest('[data-callfold]');
+    if (cf) { e.stopPropagation(); const S = Number(cf.dataset.callfold); if (openCalls.has(S)) openCalls.delete(S); else openCalls.add(S); renderBubbles(); return; }
     const ed = tgt.closest('.rph-edit-btn');
     if (ed && cur) { e.stopPropagation(); startEdit(cur, ed.closest('.rph-msg'), Number(ed.dataset.ts)); return; }
     const dl = tgt.closest('.rph-del-btn');
@@ -3150,18 +5650,23 @@ function onStackClick(e) {
     if (more && stack) { loadEarlier(stack); return; }
     const vo = tgt.closest('.rph-voice');
     if (vo) {
-        vo.classList.toggle('playing');
-        clearTimeout(vo._stop);
-        if (!vo.classList.contains('playing') || !settings.tts || !cur) return;
+        // which note plays is remembered by its time, not by the bubble — a redraw makes a new bubble
+        const vts = Number(vo.dataset.ts);
+        if (voiceNowTs === vts) { stopVoices(); voiceNowTs = 0; vo.classList.remove('playing'); return; }
+        if (!settings.tts || !cur) return;
+        vo.classList.add('playing');
         const m = msgByTs(cur, Number(vo.dataset.ts), 'voice');
         const ns = m ? nestedSender(m.text, castOfContact(cur)) : null;   // the same speaker the bubble shows
-        const words = m ? stripNamePrefix(classify(m.text).text, ns ? ns.name : m.name) : '';
-        if (!words) return;
-        speakVoice(ns ? ns.name : m.name, words, cur).then(ok => {
+        const words = m ? stripNamePrefix(voiceWords(classify(m.text)), ns ? ns.name : m.name) : '';
+        if (!words) { vo.classList.remove('playing'); return; }
+        voiceNowTs = vts;
+        speakVoice(ns ? ns.name : m.name, words, cur, true).then(ok => {
+            if (voiceNowTs === vts) voiceNowTs = 0;
+            document.querySelectorAll(`#rph-stack .rph-voice[data-ts="${vts}"]`).forEach(x => x.classList.remove('playing'));
             // the wave plays about as long as the words take to say; nothing said → it stops at once
             // (a bubble is reused between redraws, so a stuck "playing" made the next press a stop)
-            if (ok) vo._stop = setTimeout(() => vo.classList.remove('playing'), Math.min(60000, 1500 + words.length * 70));
-            else vo.classList.remove('playing');
+            // (2.1.5) the promise ends when the words have been said (or were stopped)
+            vo.classList.remove('playing');
         });
     }
 }
@@ -3186,11 +5691,18 @@ function renderButton() {
             // a tucked-away phone comes back first; otherwise the button opens the roster as before
             if (phoneTucked()) {
                 settings.phoneMin = false;
+                const nw = newsSig(suiteNews());
+                if ((contactList().filter(id => shownInLists(id) && !settings.muted[id]).some(id => unreadOf(id) > 0) || (feedStore().unseen || 0) > 0 || (nw && nw !== settings.newsSeen)) && isPhoneSkin()) phoneLocked = true;
+                settings.newsSeen = nw;   // shown once on the lock screen; the home screen keeps listing them while they last   // someone wrote while it was away: the lock screen says who
                 const cur = currentContact();
-                if (cur) delete settings.unread[cur];
+                if (cur && !phoneLocked && (!isPhoneSkin() || settings.phoneView === 'chat')) delete settings.unread[cur];
                 saveSettings(); renderBubbles(true); renderButton();
                 return;
             }
+            // BUG FIX (2.1.0): with the phone out the button only went to the home screen — on the home screen
+            // it seemed to do nothing, and with the chat's «—» hidden there the phone could not be put away.
+            // The button shows and hides the phone, as its look says.
+            if (isPhoneSkin()) { settings.phoneMin = true; saveSettings(); $('#rph-roster').removeClass('visible'); renderBubbles(); renderButton(); return; }
             renderRoster(); $('#rph-roster').toggleClass('visible');
         });
         $(document).off('click.rphRoster').on('click.rphRoster', (e) => {
@@ -3199,6 +5711,16 @@ function renderButton() {
         });
     }
     btn.toggle(!!settings.enabled);
+    // (2.1.0) a sign coming or going on another extension's button: the home / lock screen follows at once
+    if (!container[0]._rphNewsMo) {
+        // OPTIMIZATION (2.1.0): only signs coming and going count (not hover classes or animations), at most every 250 ms
+        let tmr = 0;
+        container[0]._rphNewsMo = new MutationObserver(list => {
+            if (tmr || !list.some(m => m.type === 'childList' || m.attributeName === 'data-rpgs-hot' || m.attributeName === 'hidden' || (m.attributeName === 'style' && /badge/i.test(m.target.className || '')))) return;
+            tmr = setTimeout(() => { tmr = 0; if (isPhoneSkin() && !phoneTucked() && (phoneLocked || settings.phoneView === 'home')) renderBubbles(); }, 250);
+        });
+        container[0]._rphNewsMo.observe(container[0], { subtree: true, childList: true, attributes: true, attributeFilter: ['data-rpgs-hot', 'hidden', 'style'] });
+    }
     // unread counter on the corner button while the phone is tucked away
     const unread = phoneTucked() ? contactList().reduce((a, id) => a + unreadOf(id), 0) : 0;
     let badge = btn.find('.rph-btn-badge');
@@ -3244,6 +5766,214 @@ function renderLookEditor(row, card, who) {
     });
 }
 
+/* the group editor inside «Кто на связи»: a name and the members, picked as chips */
+let rosterEdit = null;       // null | 'new' | an own group's id — which editor is open
+let rosterDetail = null;     // (2.1.0) a contact's own page: name | null
+let rosterTab = 'history';   // its tab: 'history' (your story together) | 'setup' (who is in the card, names, looks)
+function groupEditorHtml(id) {
+    const g = id ? ownGroup(id) : null;
+    const sel = g ? g.members.slice() : [];
+    const cands = groupCandidates();
+    sel.forEach(n => { if (!cands.includes(n)) cands.unshift(n); });   // a member whose card is gone can still be taken out
+    const full = sel.length >= GROUP_MAX;
+    return `<div class="rph-grp-ed" data-gid="${escapeHtml(id || '')}">
+        <input type="text" class="text_pole rph-grp-name" maxlength="40" placeholder="${escapeHtml(t('grp_name_ph'))}" aria-label="${escapeHtml(t('grp_name_ph'))}" value="${escapeHtml(g ? g.name : '')}">
+        <div class="rph-grp-hint" aria-live="polite">${escapeHtml(sel.length ? t('grp_picked', { k: sel.length, n: GROUP_MAX }) : t('grp_pick', { n: GROUP_MAX }))}</div>
+        <div class="rph-grp-chips" role="group" aria-label="${escapeHtml(t('grp_pick', { n: GROUP_MAX }))}">
+            ${cands.map(n => { const on = sel.includes(n); return `<button type="button" class="rph-grp-chip" data-n="${escapeHtml(n)}" aria-pressed="${on}"${!on && full ? ' disabled' : ''}>${avatarHtml(n)}<span>${escapeHtml(n)}</span></button>`; }).join('')}
+        </div>
+        <div class="rph-grp-btns">
+            ${g ? `<button type="button" class="rph-gbtn danger rph-grp-del">${escapeHtml(t('grp_del'))}</button>` : ''}
+            <span class="rph-grp-gap"></span>
+            <button type="button" class="rph-gbtn quiet rph-grp-cancel">${escapeHtml(t('grp_cancel'))}</button>
+            <button type="button" class="rph-gbtn main rph-grp-save"${sel.length < 2 ? ' disabled' : ''}>${escapeHtml(t(g ? 'grp_save' : 'grp_create'))}</button>
+        </div>
+    </div>`;
+}
+/* ============================================================
+   RELATIONSHIPS (2.1.0) — the «History» tab of a contact's card.
+   Without any request: when you met, how much you have written, the
+   photos they sent, your calls, gifts and moments the Diary recorded,
+   trust from Bonds. With a request, on a button only: «Remember» reads
+   your texts for promises, firsts, confessions, quarrels, dates; «Who
+   is who» says how they relate to the others on the phone (once per
+   pair, kept until a card changes).
+   ============================================================ */
+const MOMENTS_PROMPT = `Read the conversation between {{user}} and {{char}} below and list the moments that matter for their relationship: promises (who promised what), firsts, gifts, confessions, quarrels and reconciliations, dates worth remembering. Only what the text shows; never invent. Short lines. Write in {{lang}}.
+Output strictly JSON: {"moments":[{"kind":"promise|first|gift|confession|quarrel|date|other","text":"","when":""}]}`;
+const PAIR_PROMPT = `From the two descriptions below, say how these two people relate to each other: one short line for how A sees B, one for how B sees A, and one or two words for the bond. Only what the text states or clearly implies; if nothing connects them, say they are strangers. Write in {{lang}}.
+Output strictly JSON: {"a_to_b":"","b_to_a":"","bond":""}`;
+const MOMENT_KINDS = { promise: 'fa-handshake', first: 'fa-star', gift: 'fa-gift', confession: 'fa-heart', quarrel: 'fa-bolt', date: 'fa-calendar-day', other: 'fa-feather' };
+let relBusy = '';
+function relFill(tpl, n) { return tpl.split('{{user}}').join(name1 || 'the player').split('{{char}}').join(n).split('{{lang}}').join(genLang()); }
+function nameIn(hay, n) { const h = String(hay || '').toLowerCase(), k = String(n || '').toLowerCase(); return !!k && (h.includes(k) || aliasesOf(n).some(a => a && h.includes(String(a).toLowerCase()))); }
+function relData(n) {
+    const th = threadOf(n);
+    const st = diaryStateFor(n);
+    const gifts = (st?.gifts || []).filter(g => g && g.item && nameIn(g.who, n)).slice(-8);
+    const events = (st?.events || []).filter(e => e && e.title && nameIn(e.who, n)).slice(-8);
+    const calls = settings.calls.filter(c => c.id === n);
+    let trust = null;
+    try { const b = window.RPG && window.RPG.bonds; if (b && b.trust) trust = b.trust(n); } catch (e) { trust = null; }
+    return {
+        met: settings.met[n] || (th[0] && th[0].ts) || 0, msgs: th.length,
+        photos: th.filter(m => m.who === 'char' && typeof m.gen === 'string' && m.gen.startsWith(IMG_PREFIX)).slice(-6).map(m => m.gen),
+        calls: calls.length, talk: calls.reduce((a, c) => a + (c.dur || 0), 0), missed: calls.filter(c => c.missed).length,
+        gifts, events, trust: Number.isFinite(trust) ? trust : null,
+        moments: (settings.moments[n]?.list || []), pairs: phonePeople().filter(x => x !== n).map(x => ({ who: x, rel: pairOf(n, x) })).filter(x => x.rel),
+    };
+}
+function phonePeople() { const out = []; for (const id of contactList()) if (!isUnknown(id)) for (const m of contactMembers(id)) if (m && !out.includes(m)) out.push(m); return out; }
+function pairKey(a, b) { return [a, b].sort().join('\u0001'); }
+function pairStamp(a, b) { return textHash([a, b].sort().map(x => { const ch = cardChar(x); return x + ':' + (ch ? (ch.description || '') + (ch.personality || '') : ''); }).join('|')); }
+function pairOf(a, b) {
+    const p = settings.pairs[pairKey(a, b)];
+    if (!p || p.stamp !== pairStamp(a, b)) return null;
+    const first = [a, b].sort()[0] === a;   // stored as A = the first name in order
+    return { mine: first ? p.a_to_b : p.b_to_a, theirs: first ? p.b_to_a : p.a_to_b, bond: p.bond };
+}
+function relationHtml(n) {
+    const d = relData(n);
+    const fmtDay = ts => ts ? new Date(ts).toLocaleDateString(settings.language === 'en' ? 'en-GB' : 'ru-RU', { day: 'numeric', month: 'long', year: 'numeric' }) : '';
+    const stat = (ic, txt) => `<span class="rph-rel-stat"><i class="fa-solid ${ic}" aria-hidden="true"></i>${escapeHtml(txt)}</span>`;
+    const stats = [d.met ? stat('fa-seedling', t('rel_met', { d: fmtDay(d.met) })) : '', d.msgs ? stat('fa-comment', t('rel_msgs', { n: d.msgs })) : '',
+        d.calls ? stat('fa-phone', t('rel_calls', { n: d.calls, d: callDur(d.talk) })) : '', d.trust !== null ? stat('fa-heart', t('rel_trust', { n: Math.round(d.trust) })) : ''].filter(Boolean).join('');
+    const pairs = phonePeople().filter(x => x !== n);
+    const busyHere = relBusy === n;
+    return `<div class="rph-rel">
+        ${stats ? `<div class="rph-rel-stats">${stats}</div>` : `<p class="rph-card-p">${escapeHtml(t('rel_none'))}</p>`}
+        ${d.trust !== null ? `<div class="rph-rel-bar" role="meter" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.round(d.trust)}" aria-label="${escapeHtml(t('rel_trust', { n: Math.round(d.trust) }))}"><span style="width:${Math.max(0, Math.min(100, d.trust))}%"></span></div>` : ''}
+        ${d.photos.length ? `<div class="rph-card-h">${escapeHtml(t('rel_photos'))}</div><div class="rph-rel-photos">${d.photos.map(k => imgTag(k)).join('')}</div>` : ''}
+        <div class="rph-card-h">${escapeHtml(t('rel_moments'))}</div>
+        ${d.moments.length || d.gifts.length || d.events.length ? `<ul class="rph-rel-list">
+            ${d.moments.map(m => `<li><i class="fa-solid ${MOMENT_KINDS[m.kind] || MOMENT_KINDS.other}" aria-hidden="true"></i><span>${escapeHtml(m.text)}${m.when ? `<small>${escapeHtml(m.when)}</small>` : ''}</span></li>`).join('')}
+            ${d.gifts.map(g => `<li><i class="fa-solid fa-gift" aria-hidden="true"></i><span>${escapeHtml(clip(g.item, 80))}${g.who ? `<small>${escapeHtml(clip(g.who, 60))}${g.when ? ' · ' + escapeHtml(clip(g.when, 30)) : ''}</small>` : ''}</span></li>`).join('')}
+            ${d.events.map(e => `<li><i class="fa-solid fa-book" aria-hidden="true"></i><span>${escapeHtml(clip(e.title, 90))}${e.when || e.where ? `<small>${escapeHtml([clip(e.when, 30), clip(e.where, 40)].filter(Boolean).join(' · '))}</small>` : ''}</span></li>`).join('')}
+        </ul>` : `<p class="rph-card-p">${escapeHtml(t('rel_no_moments'))}</p>`}
+        <button type="button" class="rph-gbtn quiet rph-rel-recall" data-name="${escapeHtml(n)}" title="${escapeHtml(t('cost_one'))}"${busyHere || !threadOf(n).length ? ' disabled' : ''}><i class="fa-solid fa-wand-magic-sparkles" aria-hidden="true"></i> ${escapeHtml(t(busyHere ? 'rel_recalling' : 'rel_recall'))}</button>
+        ${pairs.length ? `<div class="rph-card-h">${escapeHtml(t('rel_pairs'))}</div>
+        ${d.pairs.length ? `<ul class="rph-rel-list rph-rel-pairs-list">${d.pairs.map(x => `<li>${avatarHtml(x.who)}<span><b>${escapeHtml(x.who)}</b>${x.rel.bond ? ` <em>${escapeHtml(x.rel.bond)}</em>` : ''}<small>${escapeHtml(n)} → ${escapeHtml(x.who)}: ${escapeHtml(x.rel.mine || '—')}</small><small>${escapeHtml(x.who)} → ${escapeHtml(n)}: ${escapeHtml(x.rel.theirs || '—')}</small></span></li>`).join('')}</ul>` : ''}
+        ${d.pairs.length < pairs.length ? `<button type="button" class="rph-gbtn quiet rph-rel-pairs" data-name="${escapeHtml(n)}" title="${escapeHtml(t('cost_n', { n: Math.min(5, pairs.length - d.pairs.length) }))}"${busyHere ? ' disabled' : ''}><i class="fa-solid fa-people-arrows" aria-hidden="true"></i> ${escapeHtml(t('rel_pairs_btn'))}</button>` : ''}` : ''}
+    </div>`;
+}
+async function recallMoments(n) {
+    if (relBusy || !apiKey()) { if (!apiKey()) toastr.warning(t('nokey')); return; }
+    const th = threadOf(n);
+    if (!th.length) return;
+    relBusy = n; renderRoster();
+    try {
+        const you = name1 || 'You';
+        const text = th.slice(-120).map(m => `${m.who === 'user' ? you : m.name}: ${String(m.text).replace(/\s+/g, ' ').slice(0, 400)}`).join('\n');
+        const data = readJsonLoose(await feedCall(relFill(MOMENTS_PROMPT, n), `[THE CONVERSATION]\n${text}`));
+        const list = (data && Array.isArray(data.moments) ? data.moments : []).map(m => ({ kind: MOMENT_KINDS[m && m.kind] ? m.kind : 'other', text: cleanLine(m && m.text, 200), when: cleanLine(m && m.when, 40) || '' })).filter(m => m.text).slice(0, 20);
+        if (!list.length) { toastr.info(t('rel_nothing')); return; }
+        settings.moments[n] = { list, upto: th[th.length - 1].ts };
+        saveSettings();
+    } catch (e) { toastr.warning(e && e.name === 'TimeoutError' ? t('timeout') : t('err')); console.warn('[Phone] moments failed', e); }
+    finally { relBusy = ''; renderRoster(); }
+}
+async function learnPairs(n) {
+    if (relBusy || !apiKey()) { if (!apiKey()) toastr.warning(t('nokey')); return; }
+    const todo = phonePeople().filter(x => x !== n && !pairOf(n, x)).slice(0, 5);
+    if (!todo.length) return;
+    relBusy = n; renderRoster();
+    try {
+        for (const x of todo) {
+            const [a, b] = [n, x].sort();
+            const data = readJsonLoose(await feedCall(relFill(PAIR_PROMPT, a), `A — ${await cardOf(a)}\n\nB — ${await cardOf(b)}`));
+            if (!data) continue;
+            settings.pairs[pairKey(a, b)] = { a_to_b: cleanLine(data.a_to_b, 160) || '', b_to_a: cleanLine(data.b_to_a, 160) || '', bond: cleanLine(data.bond, 40) || '', stamp: pairStamp(a, b) };
+            saveSettings(); renderRoster();
+        }
+    } catch (e) { toastr.warning(e && e.name === 'TimeoutError' ? t('timeout') : t('err')); console.warn('[Phone] pairs failed', e); }
+    finally { relBusy = ''; renderRoster(); }
+}
+// (2.1.3) the card shows the whole picture, not a cropped circle; a tap opens it at full size
+function cardPortrait(n) {
+    const ch = cardFor(n);
+    if (!ch || !ch.avatar) return avatarHtml(n);
+    return `<button type="button" class="rph-card-pic" data-full="/characters/${escapeHtml(encodeURIComponent(ch.avatar))}" aria-label="${escapeHtml(t('pic_full', { name: n }))}"><img src="/thumbnail?type=avatar&file=${escapeHtml(encodeURIComponent(ch.avatar))}" alt="" draggable="false"></button>`;
+}
+function openPicView(url, from) {
+    const host = from.closest('.rph-view, #rph-roster') || document.body;
+    host.querySelector('.rph-pic-view')?.remove();
+    const v = document.createElement('div');
+    v.className = 'rph-pic-view'; v.setAttribute('role', 'dialog'); v.setAttribute('aria-modal', 'true'); v.tabIndex = -1;
+    v.setAttribute('aria-label', from.getAttribute('aria-label') || '');
+    const close = document.createElement('button'); close.type = 'button'; close.className = 'rph-tbtn rph-pic-x'; close.setAttribute('aria-label', t('gal_close')); close.innerHTML = '<i class="fa-solid fa-xmark" aria-hidden="true"></i>';
+    const im = new Image(); im.alt = ''; im.src = url;
+    v.append(im, close);
+    const done = () => { v.remove(); document.removeEventListener('keydown', key, true); from.focus({ preventScroll: true }); };
+    const key = e => { if (e.key === 'Escape') { e.stopPropagation(); e.preventDefault(); done(); } };
+    v.addEventListener('click', done); document.addEventListener('keydown', key, true);
+    host.appendChild(v); v.focus({ preventScroll: true });
+}
+document.addEventListener('click', e => { const b = e.target.closest && e.target.closest('.rph-card-pic'); if (b && b.dataset.full && b.dataset.full.startsWith('/characters/')) { e.preventDefault(); e.stopPropagation(); openPicView(b.dataset.full, b); } }, true);
+const voiceWho = {};   // (2.1.0) whose voice the card is showing: the card itself or someone living in it
+function contactCardHtml(n) {
+    const on = !!settings.active[n];
+    const vw = voiceWho[n] && castList(n).includes(voiceWho[n]) ? voiceWho[n] : n;
+    return `<div class="rph-card">
+        <div class="rph-card-head">
+            <button type="button" class="rph-card-back" aria-label="${escapeHtml(t('card_back'))}"><i class="fa-solid fa-chevron-left" aria-hidden="true"></i></button>
+            ${cardPortrait(n)}
+            <span class="rph-card-who"><b>${escapeHtml(n)}</b><small>${escapeHtml(on ? t('card_status_on') : t('card_status_off'))}</small></span>
+        </div>
+        <div class="rph-card-acts">
+            <span class="rph-card-btns"><button type="button" class="rph-gbtn main rph-card-write" data-name="${escapeHtml(n)}"><i class="fa-solid fa-comment" aria-hidden="true"></i> ${escapeHtml(t('card_write'))}</button>${isPhoneSkin() ? `<button type="button" class="rph-gbtn quiet rph-card-call" data-name="${escapeHtml(n)}" aria-label="${escapeHtml(t('call_call'))}: ${escapeHtml(n)}"><i class="fa-solid fa-phone" aria-hidden="true"></i> ${escapeHtml(t('call_call'))}</button>` : ''}</span>
+            <span class="rph-card-sw"><span>${escapeHtml(t('card_on'))}</span><div class="rph-toggle ${on ? 'on' : ''}" data-name="${escapeHtml(n)}" role="switch" tabindex="0" aria-checked="${on}" aria-label="${escapeHtml(t('card_on'))}"><div class="rph-knob"></div></div></span>
+        </div>
+        <div class="rph-card-tabs" role="tablist">
+            <button type="button" role="tab" class="rph-card-tab" data-tab="history" aria-selected="${rosterTab !== 'setup'}">${escapeHtml(t('rel_tab'))}</button>
+            <button type="button" role="tab" class="rph-card-tab" data-tab="setup" aria-selected="${rosterTab === 'setup'}">${escapeHtml(t('rel_setup'))}</button>
+        </div>
+        ${rosterTab !== 'setup' ? relationHtml(n) : `
+        <div class="rph-castrow rph-card-sec" data-name="${escapeHtml(n)}">
+            <label class="rph-card-h" for="rph-cast-${escapeHtml(textHash(n))}">${escapeHtml(t('card_cast_h'))}</label>
+            <p class="rph-card-p">${escapeHtml(t('card_cast_p'))}</p>
+            <input type="text" id="rph-cast-${escapeHtml(textHash(n))}" class="text_pole rph-cast-in" maxlength="400" placeholder="${escapeHtml(t('card_cast_ph'))}" value="${escapeHtml(String(settings.cast[n] || ''))}">
+            <label class="rph-card-h" for="rph-alias-${escapeHtml(textHash(n))}">${escapeHtml(t('card_alias_h'))}</label>
+            <p class="rph-card-p">${escapeHtml(t('card_alias_p'))}</p>
+            <input type="text" id="rph-alias-${escapeHtml(textHash(n))}" class="text_pole rph-cast-in rph-alias-in" maxlength="600" placeholder="${escapeHtml(t('card_alias_ph'))}" value="${escapeHtml(String(settings.aliases[n] || ''))}">
+        </div>
+        <div class="rph-card-sec">
+            <div class="rph-card-h">${escapeHtml(t('look_title'))}</div>
+            <p class="rph-card-p">${escapeHtml(t('card_look_p'))}</p>
+            <div class="rph-lookrow" data-name="${escapeHtml(n)}"></div>
+        </div>
+        <div class="rph-card-sec rph-card-voice" data-name="${escapeHtml(vw)}" data-card="${escapeHtml(n)}">
+            <div class="rph-card-h">${escapeHtml(t('voice_h'))}</div>
+            <p class="rph-card-p">${escapeHtml(t('voice_p'))}</p>
+            ${castList(n).length ? `<select class="text_pole rph-voice-who" aria-label="${escapeHtml(t('voice_who'))}">${[n].concat(castList(n)).map(x => `<option value="${escapeHtml(x)}"${x === vw ? ' selected' : ''}>${escapeHtml(x)}</option>`).join('')}</select>` : ''}
+            <div class="rph-voice-row">
+                <select class="text_pole rph-voice-sel" aria-label="${escapeHtml(t('voice_h'))}"><option value="">${escapeHtml(t('voice_none'))}</option>${GEMINI_VOICES.map(v => `<option value="${v}"${voicePin(vw)?.voice === v ? ' selected' : ''}>${v}</option>`).join('')}</select>
+                <button type="button" class="rph-gbtn quiet rph-voice-try"${voicePin(vw) ? '' : ' disabled'}><i class="fa-solid fa-play" aria-hidden="true"></i> ${escapeHtml(t('voice_try'))}</button>
+            </div>
+            <select class="text_pole rph-voice-manner" aria-label="${escapeHtml(t('voice_manner'))}"${voicePin(vw) ? '' : ' disabled'}>
+                <option value="">${escapeHtml(t('voice_m_none'))}</option>
+                ${Object.keys(VOICE_MANNERS).map(k => `<option value="${k}"${settings.voices[vw]?.manner === k ? ' selected' : ''}>${escapeHtml(t('voice_m_' + k))}</option>`).join('')}
+                <option value="own"${settings.voices[vw]?.manner && !VOICE_MANNERS[settings.voices[vw].manner] ? ' selected' : ''}>${escapeHtml(t('voice_m_own'))}</option>
+            </select>
+            <input type="text" class="text_pole rph-voice-own" maxlength="200" placeholder="${escapeHtml(t('voice_own_ph'))}" aria-label="${escapeHtml(t('voice_m_own'))}" value="${escapeHtml(settings.voices[vw]?.manner && !VOICE_MANNERS[settings.voices[vw].manner] ? settings.voices[vw].manner : '')}"${settings.voices[vw]?.manner && !VOICE_MANNERS[settings.voices[vw].manner] ? '' : ' hidden'}>
+        </div>
+        <div class="rph-card-sec rph-card-secret">
+            <div class="rph-card-h">${escapeHtml(t('sec_title'))}</div>
+            <p class="rph-card-p">${escapeHtml(t('sec_p'))}</p>
+            <span class="rph-card-btns"><button type="button" class="rph-gbtn quiet rph-mute-tg" data-id="${escapeHtml(n)}" aria-pressed="${!!settings.muted[n]}"><i class="fa-solid ${settings.muted[n] ? 'fa-bell' : 'fa-bell-slash'}" aria-hidden="true"></i> ${escapeHtml(t(settings.muted[n] ? 'mute_off' : 'mute_on'))}</button>
+            <button type="button" class="rph-gbtn quiet rph-hide-tg" data-id="${escapeHtml(n)}" aria-pressed="${!!settings.hidden[n]}">${escapeHtml(t(settings.hidden[n] ? 'hid_off' : 'hid_on'))}</button>
+            <button type="button" class="rph-gbtn danger rph-blk-tg" data-id="${escapeHtml(n)}" aria-pressed="${!!settings.blocked[n]}">${escapeHtml(t(settings.blocked[n] ? 'blk_off' : 'blk_on'))}</button></span>
+        </div>`}
+    </div>`;
+}
+function groupEditorPicked(ed) { return [...ed.querySelectorAll('.rph-grp-chip[aria-pressed="true"]')].map(b => b.dataset.n); }
+function groupEditorSync(ed) {
+    const k = groupEditorPicked(ed).length;
+    ed.querySelectorAll('.rph-grp-chip').forEach(b => { b.disabled = b.getAttribute('aria-pressed') !== 'true' && k >= GROUP_MAX; });
+    ed.querySelector('.rph-grp-save').disabled = k < 2;
+    ed.querySelector('.rph-grp-hint').textContent = k ? t('grp_picked', { k, n: GROUP_MAX }) : t('grp_pick', { n: GROUP_MAX });
+}
+
+let rosterShown = null;
 function renderRoster() {
     const body = $('#rph-roster-body');
     if (!body.length) return;
@@ -3265,43 +5995,172 @@ function renderRoster() {
     } catch (e) { }
     characters.forEach(c => { if (c?.name && !seen.has(c.name)) { seen.add(c.name); list.push(c.name); } });
 
-    let html = `<div class="rph-roster-title"><i class="fa-solid fa-mobile-screen-button"></i> ${t('roster')}</div>`;
-    // the open group chat gets its own shared conversation
+    if (rosterDetail && !list.includes(rosterDetail) && !characters.some(c => c?.name === rosterDetail)) rosterDetail = null;
+    let html;
+    if (rosterDetail) html = contactCardHtml(rosterDetail);
+    else {
+    html = `<div class="rph-roster-title"><i class="fa-solid fa-mobile-screen-button"></i> ${t('roster')}</div>`;
+    // groups: the phone's own (made here), then the open Tavern group chat
+    const own = Object.keys(settings.groups).filter(isOwnGroup);
     const gid = groupContactId();
-    if (gid) {
-        html += `<div class="rph-row group">
-            <span class="rph-ava rph-ava-npc" style="background:#3c5a8a"><i class="fa-solid fa-users"></i></span>
-            <span class="rph-row-name rph-open" data-open="${escapeHtml(gid)}" title="${escapeHtml(t('open_chat'))}">${escapeHtml(t('group_chat'))}: ${escapeHtml(contactLabel(gid))}</span>
-            <div class="rph-toggle ${settings.active[gid] ? 'on' : ''}" data-name="${escapeHtml(gid)}"><div class="rph-knob"></div></div>
-        </div>`;
-    }
+    html += `<div class="rph-sub"><span>${escapeHtml(t('grp_groups'))}</span>${rosterEdit === 'new' ? '' : `<button type="button" class="rph-grp-new"><i class="fa-solid fa-plus" aria-hidden="true"></i> ${escapeHtml(t('grp_new'))}</button>`}</div>`;
+    if (rosterEdit === 'new') html += groupEditorHtml(null);
+    html += own.map(id => {
+        const g = ownGroup(id);
+        return `<div class="rph-row group own">
+            ${groupAvaHtml(id)}
+            <span class="rph-row-name rph-open" data-open="${escapeHtml(id)}" title="${escapeHtml(t('open_chat'))}"><span class="rph-row-n">${escapeHtml(g.name)}${settings.active[id] && unreadOf(id) ? ` <b class="rph-unread">•</b>` : ''}</span><small>${escapeHtml(g.members.join(', '))}</small></span>
+            <button type="button" class="rph-grp-edit${rosterEdit === id ? ' on' : ''}" data-gid="${escapeHtml(id)}" title="${escapeHtml(t('grp_edit'))}" aria-label="${escapeHtml(t('grp_edit'))}: ${escapeHtml(g.name)}" aria-expanded="${rosterEdit === id}"><i class="fa-solid fa-pen" aria-hidden="true"></i></button>
+            <div class="rph-toggle ${settings.active[id] ? 'on' : ''}" data-name="${escapeHtml(id)}"><div class="rph-knob"></div></div>
+        </div>${rosterEdit === id ? groupEditorHtml(id) : ''}`;
+    }).join('');
+    // BUG FIX (2.1.0): only the Tavern group that is open RIGHT NOW had a row here — a group chat put on
+    // the phone earlier stayed in Messages with no switch to take it off. Every Tavern group on the phone
+    // is listed now (its Tavern chat is never touched; switching it off only hides the phone thread).
+    const tavernGroups = [gid, ...activeNames().filter(id => String(id).startsWith(GROUP_PREFIX))].filter((id, i, a) => id && a.indexOf(id) === i);
+    html += tavernGroups.map(id => `<div class="rph-row group">
+            ${groupAvaHtml(id)}
+            <span class="rph-row-name rph-open" data-open="${escapeHtml(id)}" title="${escapeHtml(t('open_chat'))}"><span class="rph-row-n">${escapeHtml(contactLabel(id))}${settings.active[id] && unreadOf(id) ? ` <b class="rph-unread">•</b>` : ''}</span><small>${escapeHtml(t(id === gid ? 'grp_tavern_open' : 'grp_tavern'))}</small></span>
+            <div class="rph-toggle ${settings.active[id] ? 'on' : ''}" data-name="${escapeHtml(id)}" role="switch" tabindex="0" aria-checked="${!!settings.active[id]}" aria-label="${escapeHtml(t('card_on'))}: ${escapeHtml(contactLabel(id))}"><div class="rph-knob"></div></div>
+        </div>`).join('');
+    // (2.1.0) unknown numbers, then blocked people — each with a way out
+    const unks = Object.keys(settings.unknown).filter(id => settings.threads[id] || settings.active[id]);
+    if (unks.length) html += `<div class="rph-sub"><span>${escapeHtml(t('unk_title'))}</span></div>` + unks.map(id => `<div class="rph-row">
+            ${UNKNOWN_AVA}
+            <span class="rph-row-name rph-open" data-open="${escapeHtml(id)}" title="${escapeHtml(t('open_chat'))}"><span class="rph-row-n">${escapeHtml(contactLabel(id))}${unreadOf(id) ? ` <b class="rph-unread">•</b>` : ''}</span><small>${escapeHtml(t('unk_kind_' + (settings.unknown[id].kind || 'hint')))}</small></span>
+            <button type="button" class="rph-unk-del" data-id="${escapeHtml(id)}" title="${escapeHtml(t('unk_del'))}" aria-label="${escapeHtml(t('unk_del'))}: ${escapeHtml(contactLabel(id))}"><i class="fa-solid fa-trash" aria-hidden="true"></i></button>
+        </div>`).join('');
+    const blk = Object.keys(settings.blocked).filter(id => settings.blocked[id]);
+    if (blk.length) html += `<div class="rph-sub"><span>${escapeHtml(t('blk_title'))}</span></div>` + blk.map(id => `<div class="rph-row">
+            ${contactAva(id)}
+            <span class="rph-row-name rph-open" data-open="${escapeHtml(id)}" title="${escapeHtml(t('open_chat'))}"><span class="rph-row-n">${escapeHtml(contactLabel(id))}</span><small>${escapeHtml(t('blk_state'))}</small></span>
+            <button type="button" class="rph-gbtn quiet rph-blk-off" data-id="${escapeHtml(id)}">${escapeHtml(t('blk_off'))}</button>
+        </div>`).join('');
+    html += `<div class="rph-sub"><span>${escapeHtml(t('grp_people'))}</span></div>`;
     if (!list.length) html += `<div class="rph-hint">${t('no_chars')}</div>`;
     html += list.slice(0, 60).map(n => {
-        const castTxt = String(settings.cast[n] || '');
-        const castN = castTxt.split(/[,;\n]/).filter(x => x.trim()).length;
+        const castN = castList(n).length;
+        const sub = [settings.active[n] ? (statusOf(n) || t('card_status_on')) : t('card_status_off'), settings.hidden[n] ? t('hid_state') : '', settings.muted[n] ? t('mute_state') : '', castN ? t('card_cast_n', { n: castN }) : ''].filter(Boolean).join(' · ');
         return `
         <div class="rph-row">
             ${avatarHtml(n)}
-            <span class="rph-row-name rph-open" data-open="${escapeHtml(n)}" title="${escapeHtml(t('open_chat'))}">${escapeHtml(n)}${settings.active[n] && unreadOf(n) ? ` <b class="rph-unread">•</b>` : ''}</span>
-            ${settings.active[n] ? `<i class="fa-solid fa-image-portrait rph-look-btn" data-name="${escapeHtml(n)}" title="${escapeHtml(t('look_title'))}"></i>` : ''}
-            ${settings.active[n] ? `<i class="fa-solid fa-user-group rph-cast-btn ${castN ? 'has' : ''}" data-name="${escapeHtml(n)}" title="${escapeHtml(t('cast_title'))}">${castN ? `<b>${castN}</b>` : ''}</i>` : ''}
-            <div class="rph-toggle ${settings.active[n] ? 'on' : ''}" data-name="${escapeHtml(n)}"><div class="rph-knob"></div></div>
-        </div>
-        ${settings.active[n] ? `<div class="rph-lookrow" data-name="${escapeHtml(n)}" style="display:none"></div>` : ''}
-        ${settings.active[n] ? `<div class="rph-castrow" data-name="${escapeHtml(n)}" style="display:none">
-            <input type="text" class="text_pole rph-cast-in" maxlength="400" placeholder="${escapeHtml(t('cast_ph'))}" title="${escapeHtml(t('cast_tip'))}" value="${escapeHtml(castTxt)}">
-            <input type="text" class="text_pole rph-cast-in rph-alias-in" maxlength="600" placeholder="${escapeHtml(t('alias_ph'))}" title="${escapeHtml(t('alias_tip'))}" value="${escapeHtml(String(settings.aliases[n] || ''))}">
-        </div>` : ''}`;
+            <span class="rph-row-name rph-open" data-open="${escapeHtml(n)}" title="${escapeHtml(t('open_chat'))}"><span class="rph-row-n">${escapeHtml(n)}${settings.active[n] && unreadOf(n) ? ` <b class="rph-unread">•</b>` : ''}</span><small>${escapeHtml(sub)}</small></span>
+            <button type="button" class="rph-card-btn" data-name="${escapeHtml(n)}" title="${escapeHtml(t('card_open'))}" aria-label="${escapeHtml(t('card_open'))}: ${escapeHtml(n)}"><i class="fa-solid fa-sliders" aria-hidden="true"></i></button>
+            <div class="rph-toggle ${settings.active[n] ? 'on' : ''}" data-name="${escapeHtml(n)}" role="switch" tabindex="0" aria-checked="${!!settings.active[n]}" aria-label="${escapeHtml(t('card_on'))}: ${escapeHtml(n)}"><div class="rph-knob"></div></div>
+        </div>`;
     }).join('');
-    html += `<div class="rph-roster-actions"><button class="menu_button" id="rph-clear">${t('clear')}</button></div>`;
+    const curC = currentContact();
+    html += curC ? `<div class="rph-roster-actions"><button class="menu_button" id="rph-clear" data-label="${escapeHtml(t('clear_of', { name: contactLabel(curC) }))}">${escapeHtml(t('clear_of', { name: contactLabel(curC) }))}</button></div>` : '';
+    }
     // OPTIMIZATION (2.0.0): switching someone on at the bottom of a long list threw the list
     // back to the top — the scroll is kept now. Handlers are delegated: one per action for
     // the whole list instead of one per row on every redraw.
+    // BUG FIX (2.1.3): every redraw of the phone (the minute tick, a new message) rebuilt this list —
+    // a group name being typed, the members picked, the text in a card's field were wiped. Nothing
+    // changed → nothing is touched.
+    if (body[0].dataset.sig === html && body[0].childElementCount) return;
+    body[0].dataset.sig = html;
     const scroller = document.getElementById('rph-roster');
     const keepTop = scroller ? scroller.scrollTop : 0;
     body.html(html);
+    // (2.1.5) the card slides in when it is opened — not again on every tab or field change
+    if (rosterDetail && rosterDetail !== rosterShown) body[0].querySelector('.rph-card')?.classList.add('enter');
+    rosterShown = rosterDetail;
     if (scroller) scroller.scrollTop = keepTop;
+    if (rosterDetail) { const lr = body[0].querySelector('.rph-lookrow'); if (lr) renderLookEditor(lr, rosterDetail, rosterDetail); body[0].querySelectorAll('img.rph-img[data-key]:not([src])').forEach(async im => { const u = await imageUrl(im.dataset.key); if (u && im.isConnected) im.src = u; }); }
     body.off('.rph');
+
+    /* own group chats: new, edit, members, save, delete */
+    const closeEditor = () => { rosterEdit = null; renderRoster(); };
+    /* a contact's own page: what each field does, said in words */
+    body.on('change.rph', '.rph-voice-who', function () { voiceWho[String(this.closest('.rph-card-voice').dataset.card)] = String(this.value); renderRoster(); });
+    body.on('change.rph', '.rph-voice-sel', function () {
+        const n = String(this.closest('.rph-card-voice').dataset.name);
+        if (!this.value) delete settings.voices[n]; else settings.voices[n] = Object.assign({}, settings.voices[n], { voice: this.value });
+        saveSettings(); renderRoster();
+    });
+    body.on('change.rph', '.rph-voice-manner', function () {
+        const box = this.closest('.rph-card-voice'), n = String(box.dataset.name);
+        if (!settings.voices[n]) return;
+        if (this.value === 'own') { box.querySelector('.rph-voice-own').hidden = false; box.querySelector('.rph-voice-own').focus(); return; }
+        settings.voices[n].manner = this.value; box.querySelector('.rph-voice-own').hidden = true; saveSettings();
+    });
+    body.on('keydown.rph', '.rph-voice-own', e => e.stopPropagation());
+    body.on('change.rph', '.rph-voice-own', function () {
+        const n = String(this.closest('.rph-card-voice').dataset.name);
+        if (!settings.voices[n]) return;
+        settings.voices[n].manner = String(this.value).replace(/[\r\n]+/g, ' ').trim().slice(0, 200);
+        saveSettings();
+    });
+    body.on('click.rph', '.rph-voice-try', async function () {
+        const n = String(this.closest('.rph-card-voice').dataset.name);
+        const pin = voicePin(n); if (!pin || this.disabled) return;
+        this.disabled = true;
+        try { await geminiSpeak(pin, t('voice_sample', { name: n })); }
+        catch (e) { toastr.warning(t('voice_err', { m: String(e.message || e).slice(0, 160) })); }
+        finally { this.disabled = false; }
+    });
+    body.on('click.rph', '.rph-mute-tg', function () { const id = String(this.dataset.id); if (settings.muted[id]) delete settings.muted[id]; else { settings.muted[id] = true; const v = (settings.invites || {})[id]; if (v && v.state === 'open') delete settings.invites[id]; } saveSettings(); lastTabSig = ''; renderRoster(); renderBubbles(); renderButton(); });
+    body.on('click.rph', '.rph-hide-tg', function () { const id = String(this.dataset.id); if (settings.hidden[id]) delete settings.hidden[id]; else settings.hidden[id] = true; saveSettings(); lastTabSig = ''; renderRoster(); renderBubbles(); });
+    body.on('click.rph', '.rph-blk-tg, .rph-blk-off', function (e) { e.stopPropagation(); const id = String(this.dataset.id); if (settings.blocked[id]) delete settings.blocked[id]; else { settings.blocked[id] = true; if (call && call.id === id) endCall(); } saveSettings(); lastTabSig = ''; renderRoster(); renderBubbles(); renderButton(); });
+    body.on('click.rph', '.rph-unk-del', function (e) {
+        e.stopPropagation();
+        if (!this.classList.contains('armed')) { this.classList.add('armed'); this.title = t('grp_del_sure'); clearTimeout(this._d); this._d = setTimeout(() => { if (this.isConnected) { this.classList.remove('armed'); this.title = t('unk_del'); } }, 3000); return; }
+        deleteUnknown(String(this.dataset.id)); renderRoster(); renderBubbles(); renderButton();
+    });
+    body.on('click.rph', '.rph-card-tab', function () { rosterTab = this.dataset.tab; renderRoster(); if (kbNav) body.find(`.rph-card-tab[data-tab="${rosterTab}"]`).trigger('focus'); });
+    body.on('click.rph', '.rph-rel-recall', function () { recallMoments(String(this.dataset.name)); });
+    body.on('click.rph', '.rph-rel-pairs', function () { learnPairs(String(this.dataset.name)); });
+    body.on('click.rph', '.rph-card-btn', function (e) { e.stopPropagation(); rosterEdit = null; rosterTab = 'history'; rosterDetail = String(this.dataset.name); renderRoster(); if (kbNav) body.find('.rph-card-back, .rph-card-tab[aria-selected="true"]').first().trigger('focus'); });
+    body.on('click.rph', '.rph-card-back', function () { const n = rosterDetail; rosterDetail = null; renderRoster(); if (kbNav) body.find(`.rph-card-btn[data-name="${CSS.escape(n || '')}"]`).trigger('focus'); });
+    body.on('click.rph', '.rph-card-call', function () { const n = String(this.dataset.name); settings.active[n] = true; rosterDetail = null; if (!startCall(n, 'out')) toastr.info(t('call_busy')); renderRoster(); });
+    body.on('click.rph', '.rph-card-write', function () { const n = String(this.dataset.name); settings.active[n] = true; rosterDetail = null; $('#rph-roster').removeClass('visible'); openContact(n); renderRoster(); });
+    body.on('keydown.rph', '.rph-toggle', function (e) { if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); $(this).trigger('click'); } });
+    body.on('keydown.rph', '.rph-card', function (e) { if (e.key === 'Escape' && !e.target.closest('input, textarea, select')) { e.preventDefault(); e.stopPropagation(); $(this).find('.rph-card-back').trigger('click'); } });
+    body.on('click.rph', '.rph-grp-new', () => { rosterEdit = 'new'; renderRoster(); body.find('.rph-grp-name').trigger('focus'); });
+    body.on('click.rph', '.rph-grp-edit', function (e) {
+        e.stopPropagation();
+        const id = String(this.dataset.gid);
+        rosterEdit = rosterEdit === id ? null : id;
+        renderRoster();
+        if (rosterEdit) body.find('.rph-grp-name').trigger('focus');
+    });
+    body.on('click.rph', '.rph-grp-chip', function () {
+        if (this.disabled) return;
+        this.setAttribute('aria-pressed', String(this.getAttribute('aria-pressed') !== 'true'));
+        groupEditorSync(this.closest('.rph-grp-ed'));
+    });
+    body.on('click.rph', '.rph-grp-cancel', closeEditor);
+    body.on('keydown.rph', '.rph-grp-ed', function (e) {
+        e.stopPropagation();          // Tavern's own hotkeys stay out of the name field
+        if (e.key === 'Escape') { e.preventDefault(); closeEditor(); }
+        else if (e.key === 'Enter' && e.target.classList.contains('rph-grp-name')) { e.preventDefault(); $(this).find('.rph-grp-save').trigger('click'); }
+    });
+    body.on('click.rph', '.rph-grp-save', function () {
+        const ed = this.closest('.rph-grp-ed');
+        const id = ed.dataset.gid, name = ed.querySelector('.rph-grp-name').value, picked = groupEditorPicked(ed);
+        if (picked.length < 2) { toastr.info(t('grp_need2')); return; }
+        if (id) { updateGroup(id, name, picked); lastSig = ''; lastTabSig = ''; }
+        else { const nid = createGroup(name, picked); if (nid) { rosterEdit = null; $('#rph-roster').removeClass('visible'); openContact(nid); renderRoster(); return; } }
+        rosterEdit = null;
+        saveSettings(); renderRoster(); renderBubbles(true);
+    });
+    // two presses: the first arms the button for 3 s, the second deletes the group with its messages
+    body.on('click.rph', '.rph-grp-del', function () {
+        const id = this.closest('.rph-grp-ed').dataset.gid;
+        if (!this.classList.contains('armed')) {
+            this.classList.add('armed'); this.textContent = t('grp_del_sure');
+            clearTimeout(this._disarm);
+            this._disarm = setTimeout(() => { if (this.isConnected) { this.classList.remove('armed'); this.textContent = t('grp_del'); } }, 3000);
+            return;
+        }
+        clearTimeout(this._disarm);
+        const name = contactLabel(id);
+        deleteGroup(id);
+        rosterEdit = null;
+        renderRoster(); renderBubbles(true); renderButton();
+        toastr.info(t('grp_deleted', { name }));
+    });
 
     body.on('click.rph', '.rph-toggle', function () {
         const n = $(this).data('name');
@@ -3311,6 +6170,7 @@ function renderRoster() {
         saveSettings();
         scrollOffset = 0;
         renderRoster(); renderBubbles();
+        if (kbNav) body.find(`.rph-toggle[data-name="${CSS.escape(String(n))}"]`).trigger('focus');
     });
     body.on('click.rph', '.rph-cast-btn', function (e) {
         e.stopPropagation();
@@ -3425,11 +6285,11 @@ function renderRoster() {
             this.classList.add('armed');
             this.textContent = t('clear_confirm', { name: contactLabel(cur) });
             clearTimeout(this._disarm);
-            this._disarm = setTimeout(() => { this.classList.remove('armed'); this.textContent = t('clear'); }, 3000);
+            this._disarm = setTimeout(() => { this.classList.remove('armed'); this.textContent = this.dataset.label || t('clear'); }, 3000);
             return;
         }
         clearTimeout(this._disarm);
-        this.classList.remove('armed'); this.textContent = t('clear');
+        this.classList.remove('armed'); this.textContent = this.dataset.label || t('clear');
         forgetMessages(settings.threads[cur]);
         settings.threads[cur] = [];
         settings.state[cur] = { lastInitiative: 0, todayCount: 0, dayStamp: '', ignored: 0 };
@@ -3521,6 +6381,40 @@ function settingsHtml() {
             <div class="rph-row">
                 <div class="rph-narrow"><label for="rph-diary-n">${t('set_diary_n')}</label><input type="number" min="0" max="10" id="rph-diary-n" class="text_pole"></div>
             </div>
+            <label class="checkbox_label"><input type="checkbox" id="rph-compress"><span>${t('set_compress')}</span></label>
+            <div class="rph-row">
+                <div><label for="rph-compress-over">${t('set_compress_over')}</label><input type="number" min="100" max="4000" step="50" id="rph-compress-over" class="text_pole"></div>
+                <div class="rph-btnrow"><div id="rph-briefs-reset" class="menu_button" title="${escapeHtml(t('set_briefs_tip'))}">${t('set_briefs_reset')} · <span id="rph-briefs-n"></span></div></div>
+            </div>
+            </div>
+
+            <div class="rph-box"><div class="rph-boxhead">🌙 ${t('set_world')}</div>
+            <label class="checkbox_label"><input type="checkbox" id="rph-catchup-on"><span>${t('set_catchup_on')}</span></label>
+            <small class="rph-note-small">${t('set_catchup_tip')}</small>
+            <label class="checkbox_label"><input type="checkbox" id="rph-chatter-on"><span>${t('set_chatter_on')}</span></label>
+            <small class="rph-note-small">${t('set_chatter_tip')}</small>
+            </div>
+
+            <div class="rph-box"><div class="rph-boxhead">📰 ${t('set_feed')}</div>
+            <label class="checkbox_label"><input type="checkbox" id="rph-feed-on"><span>${t('set_feed_on')}</span></label>
+            <small class="rph-note-small">${t('set_feed_tip')}</small>
+            <div class="rph-row">
+                <div><label for="rph-feed-every">${t('set_feed_every')}</label><input type="number" min="5" max="1440" id="rph-feed-every" class="text_pole"></div>
+                <div><label for="rph-feed-day">${t('set_feed_day')}</label><input type="number" min="1" max="48" id="rph-feed-day" class="text_pole"></div>
+                <div><label for="rph-feed-posts">${t('set_feed_posts')}</label><input type="number" min="1" max="3" id="rph-feed-posts" class="text_pole"></div>
+            </div>
+            </div>
+
+            <div class="rph-box"><div class="rph-boxhead">🕵️ ${t('set_unk')}</div>
+            <label class="checkbox_label"><input type="checkbox" id="rph-unk-on"><span>${t('set_unk_on')}</span></label>
+            <label class="checkbox_label"><input type="checkbox" id="rph-mail-on"><span>${t('set_mail_on')}</span></label>
+            <small class="rph-note-small">${t('set_unk_tip')}</small>
+            </div>
+
+            <div class="rph-box"><div class="rph-boxhead">📞 ${t('set_calls')}</div>
+            <div class="rph-row"><div><label for="rph-call-chance">${t('set_call_chance')}</label><input type="number" min="0" max="100" id="rph-call-chance" class="text_pole"></div></div>
+            <label class="checkbox_label"><input type="checkbox" id="rph-voicemail"><span>${t('set_voicemail')}</span></label>
+            <small class="rph-note-small">${t('set_calls_tip')}</small>
             </div>
 
             <div class="rph-box"><div class="rph-boxhead">⏰ ${t('set_init')}</div>
@@ -3709,7 +6603,22 @@ function setupUI() {
 
     num('#rph-msgs', 'mainChatMessages', 0, 50, 10);
     num('#rph-thmem', 'threadMemory', 2, 120, 24);
+    $('#rph-catchup-on').prop('checked', !!settings.catchupOn).on('change', function () { settings.catchupOn = this.checked; saveSettings(); });
+    $('#rph-chatter-on').prop('checked', !!settings.chatterOn).on('change', function () { settings.chatterOn = this.checked; saveSettings(); });
+    $('#rph-feed-on').prop('checked', !!settings.feedOn).on('change', function () { settings.feedOn = this.checked; saveSettings(); renderBubbles(); });
+    num('#rph-feed-every', 'feedEvery', 5, 1440, 30);
+    num('#rph-call-chance', 'callChance', 0, 100, 17);
+    $('#rph-unk-on').prop('checked', !!settings.unknownOn).on('change', function () { settings.unknownOn = this.checked; saveSettings(); });
+    $('#rph-mail-on').prop('checked', !!settings.mailOn).on('change', function () { settings.mailOn = this.checked; saveSettings(); renderBubbles(); });
+    $('#rph-voicemail').prop('checked', settings.voicemail !== false).on('change', function () { settings.voicemail = this.checked; saveSettings(); });
+    num('#rph-feed-day', 'feedPerDay', 1, 48, 6);
+    num('#rph-feed-posts', 'feedPosts', 1, 3, 2);
     $('#rph-diary').prop('checked', settings.useDiary).on('change', function () { settings.useDiary = this.checked; saveSettings(); });
+    $('#rph-compress').prop('checked', settings.compress !== false).on('change', function () { settings.compress = this.checked; saveSettings(); });
+    num('#rph-compress-over', 'compressOver', 100, 4000, 400);
+    $('#rph-briefs-n').text(Object.keys(settings.briefs || {}).length);
+    // the Phone's own briefs go; Living Scene's and RPG Map's are theirs and stay
+    $('#rph-briefs-reset').on('click', function () { settings.briefs = {}; saveSettings(); $('#rph-briefs-n').text(0); toastr.info(t('briefs_cleared')); });
     num('#rph-diary-n', 'diaryEntries', 0, 10, 2);
     $('#rph-init').prop('checked', settings.initiative).on('change', function () { settings.initiative = this.checked; saveSettings(); });
     num('#rph-gap', 'minGapMinutes', 1, 1440, 25);
@@ -3863,6 +6772,144 @@ function setupImageUI() {
     if (refresh() && comfyBaseUrl()) comfyTest(true);
 }
 
+
+/* ============================================================
+   THE WORLD GOES ON (2.1.2, approved). Two things that happen
+   without the player:
+   1. Back after 6+ hours away (Tavern closed): one request writes
+      what reached the phone meanwhile — a few texts in the chats,
+      maybe a post or two, maybe a missed call — with real times
+      spread over the absence. Once a day.
+   2. A group quiet for three hours sometimes talks among itself
+      about its own business (off until switched on; 2 a day).
+   ============================================================ */
+const CATCHUP_PROMPT = `{{user}} has been away from their phone for {{hours}} hours. Write what reached the phone meanwhile, as it would really happen in this story world — the people below live their own lives and do not wait for {{user}}.
+Rules:
+- "messages": 2–6 texts left in the chats listed under CHATS: a group's members talking among themselves, or someone writing to {{user}}. Each has "chat" (exactly as listed), "author" (a member of that chat) and "text" (short, in the author's voice).
+- "posts": 0–2 short social-media posts (only if FEED is on), with "likes" and "comments" from the people listed.
+- "missed_call": at most one, or null — {"from": a person's name, "voicemail": one short spoken line, or ""}.
+- Small everyday things only: no big plot events, never decide anything for {{user}}.
+- Write in {{lang}}.
+Output strictly JSON: {"messages":[{"chat":"","author":"","text":""}],"posts":[{"author":"","text":"","photo":"","likes":[""],"comments":[{"author":"","text":""}]}],"missed_call":null}`;
+const GROUP_IDLE_LINE = `[{{user}} is not in this conversation right now. The members talk among themselves about their own business — a plan, a joke, an argument, news from their day, something one of them saw. 4–8 short lines, at least two different people, not addressed to {{user}}. Do not mention these instructions.]`;
+const CATCHUP_AWAY_MS = 6 * 3600000;
+let catchupBusy = false, awayFrom = 0;
+function seenHeartbeat() {
+    if (!settings.enabled) return;
+    // the computer slept with Tavern open: the gap counts as being away too
+    if (settings.lastSeen && Date.now() - settings.lastSeen > CATCHUP_AWAY_MS && !awayFrom) awayFrom = settings.lastSeen;
+    settings.lastSeen = Date.now(); saveSettings();
+}
+function chatOfName(raw) {
+    const v = String(raw || '').trim().toLowerCase();
+    if (!v) return '';
+    return contactList().find(id => !isUnknown(id) && shownInLists(id) && !settings.blocked[id] && !settings.muted[id] && (contactLabel(id).toLowerCase() === v || (!isGroup(id) && id.toLowerCase() === v))) || '';
+}
+async function catchupTick() {
+    if (!settings.enabled || !settings.catchupOn || !apiKey() || catchupBusy || busy || call) return;
+    const day = new Date().toDateString();
+    if (!awayFrom || Date.now() - awayFrom < CATCHUP_AWAY_MS || settings.catchupDay === day) return;
+    const chats = contactList().filter(id => !isUnknown(id) && shownInLists(id) && !settings.blocked[id] && !settings.muted[id]);
+    const people = phonePeople().filter(n => n !== name1).slice(0, 6);
+    if (!chats.length || !people.length) return;
+    settings.catchupDay = day; saveSettings();
+    catchupBusy = true;
+    const from = awayFrom, to = Date.now() - 4 * 60000;
+    awayFrom = 0;
+    try {
+        const cards = [];
+        for (const nm of people) cards.push(await cardOf(nm));
+        const hours = Math.round((Date.now() - from) / 3600000);
+        const sys = `${feedFill(CATCHUP_PROMPT, 1).split('{{hours}}').join(String(hours))}\n\nPEOPLE (write only as these):\n${cards.join('\n\n')}`;
+        const chatLines = chats.slice(0, 8).map(id => {
+            const last = threadOf(id).slice(-3).map(m => `  ${m.who === 'user' ? (name1 || 'You') : m.name}: ${clip(m.text, 140)}`).join('\n');
+            return `- ${contactLabel(id)}${isGroup(id) ? ` (group: ${contactMembers(id).join(', ')})` : ''}${last ? '\n' + last : ''}`;
+        }).join('\n');
+        const usr = [timeContext(0), worldLine(), `[CHATS]\n${chatLines}`, `[FEED] ${settings.feedOn ? 'on' : 'off'}`, feedTies(people)].filter(Boolean).join('\n\n');
+        const data = readJsonLoose(await feedCall(sys, usr));
+        if (!data || typeof data !== 'object') { console.warn('[Phone] catch-up: nothing readable'); return; }
+        const span = Math.max(60000, to - from);
+        const at = () => Math.round(from + span * (0.15 + Math.random() * 0.8));
+        const events = [];
+        for (const x of (Array.isArray(data.messages) ? data.messages : []).slice(0, 6)) {
+            const id = chatOfName(x && x.chat);
+            if (!id) continue;
+            const author = feedName(x.author, contactMembers(id));
+            const text = cleanLine(x.text, 400);
+            if (author && text && author !== name1) events.push({ ts: at(), kind: 'msg', id, author, text });
+        }
+        const mc = data.missed_call && typeof data.missed_call === 'object' ? data.missed_call : null;
+        const callFrom = mc ? chatOfName(mc.from) : '';
+        if (callFrom && !isGroup(callFrom)) events.push({ ts: at(), kind: 'call', id: callFrom, text: cleanLine(mc.voicemail, 300) });
+        events.sort((a, b) => a.ts - b.ts);
+        let n = 0, firstNote = null;
+        for (const e of events) {
+            if (e.kind === 'msg') {
+                pushRaw(e.id, { who: 'char', name: e.author, text: e.text, ts: e.ts });
+                settings.unread[e.id] = (settings.unread[e.id] || 0) + 1; n++;
+                if (!firstNote) firstNote = e;
+            } else {
+                callLog({ id: e.id, dir: 'in', ts: e.ts, dur: 0, missed: true });
+                settings.callsUnseen = (settings.callsUnseen || 0) + 1;
+                pushRaw(e.id, { who: 'char', name: e.id, text: `[SYSTEM: ${t('call_missed_sys')}]`, ts: e.ts });
+                settings.unread[e.id] = (settings.unread[e.id] || 0) + 1;
+                if (e.text && settings.voicemail) { pushRaw(e.id, { who: 'char', name: e.id, text: `[voice message: "${e.text.replace(/"/g, "'")}"]`, ts: e.ts + 30000 }); settings.unread[e.id]++; }
+                n++;
+            }
+        }
+        let posts = 0;
+        if (settings.feedOn) {
+            const f = feedStore();
+            for (const x of (Array.isArray(data.posts) ? data.posts : []).slice(0, 2)) {
+                const author = feedName(x && x.author, people);
+                const text = cleanLine(x && x.text, 400);
+                if (!author || !text) continue;
+                const ts = at();
+                const post = { id: ts.toString(36) + Math.random().toString(36).slice(2, 7), author, text, photo: cleanLine(x.photo, 200) || '', ts, liked: false, comments: [] };
+                post.likes = (Array.isArray(x.likes) ? x.likes : []).map(l => feedName(l, people)).filter((l, i, a) => l && l !== author && a.indexOf(l) === i).slice(0, 8);
+                for (const c of (Array.isArray(x.comments) ? x.comments : []).slice(0, 3)) {
+                    const ca = feedName(c && c.author, people), ct = cleanLine(c && c.text, 240);
+                    if (ca && ct) post.comments.push({ who: 'char', author: ca, text: ct, ts: ts + 60000 });
+                }
+                f.posts.push(post); posts++;
+            }
+            f.posts.sort((a, b) => a.ts - b.ts);
+            if (f.posts.length > FEED_MAX) { const gone = f.posts.splice(0, f.posts.length - FEED_MAX); dropImages(gone.map(x => x.imgKey).filter(Boolean)); }
+            f.unseen = (f.unseen || 0) + posts;
+        }
+        saveSettings(); renderButton(); renderBubbles();
+        if (n + posts) notify(firstNote ? firstNote.author : (name1 || ''), t('catchup_note', { n: n + posts }), firstNote ? firstNote.id : null);
+    } catch (e) {
+        if (!(e && (e.name === 'AbortError' || e.name === 'TimeoutError'))) console.warn('[Phone] catch-up failed', e);
+    } finally { catchupBusy = false; }
+}
+async function chatterTick() {
+    if (!settings.enabled || !settings.chatterOn || !apiKey() || busy || call || catchupBusy) return;
+    const hour = new Date().getHours(), qf = settings.quietFrom, qt = settings.quietTo;
+    if (qf !== qt && (qf < qt ? (hour >= qf && hour < qt) : (hour >= qf || hour < qt))) return;
+    const day = new Date().toDateString();
+    if (settings.chatterDay !== day) { settings.chatterDay = day; settings.chatterCount = 0; }
+    if (settings.chatterCount >= (settings.chatterPerDay || 2)) return;
+    const groups = contactList().filter(id => isGroup(id) && shownInLists(id) && !settings.blocked[id] && !settings.muted[id] && contactMembers(id).length >= 2);
+    const quiet = groups.filter(id => { const th = threadOf(id); const last = th.length ? th[th.length - 1].ts : 0; return Date.now() - last > 3 * 3600000; });
+    if (!quiet.length || Math.random() > 0.15) return;   // not on the dot: about once in a few quiet minutes
+    const id = quiet[Math.floor(Math.random() * quiet.length)];
+    settings.chatterCount++; saveSettings();
+    const rq = beginRequest(id); renderBubbles();
+    try {
+        const msgs = await generateReply(contactMembers(id), '\n' + GROUP_IDLE_LINE.split('{{user}}').join(name1 || 'the player'), true, id);
+        if (msgs.length && isCurrent(rq)) {
+            const looking = currentContact() === id && !phoneTucked() && (!isPhoneSkin() || (settings.phoneView === 'chat' && !phoneLocked));
+            if (looking) await deliverReply(id, msgs, rq);
+            else { msgs.forEach(m => pushMsg(id, 'char', m.text, m.name)); settings.unread[id] = (settings.unread[id] || 0) + msgs.length; }
+            saveSettings(); renderButton();
+            if (!looking) notify(msgs[0].name, msgs[0].text, id);
+        }
+    } catch (e) { if (isCurrent(rq) && !(e && (e.name === 'AbortError' || e.name === 'TimeoutError'))) console.warn('[Phone] group chatter failed', e); }
+    if (!isCurrent(rq)) return;
+    finishRequest(rq); renderBubbles();
+}
+
 /* ============================================================
    INIT
    ============================================================ */
@@ -3884,6 +6931,19 @@ jQuery(() => {
     window.addEventListener('pointerdown', unlock);
     window.addEventListener('keydown', unlock);
 
+    // (2.1.3) a face that fails to load (a renamed or removed card's picture, a hiccup of the
+    // thumbnail server) was an empty circle — it is tried once more, then becomes initials
+    document.addEventListener('error', e => {
+        const im = e.target;
+        if (!(im instanceof HTMLImageElement) || !im.classList.contains('rph-ava') || !im.closest('#rph-layer, #rph-roster, #rph-tabs')) return;
+        if (!im.dataset.retry) { im.dataset.retry = '1'; const u = im.src; setTimeout(() => { if (im.isConnected) im.src = u + (u.includes('?') ? '&' : '?') + 'r=' + Date.now(); }, 700); return; }
+        const sp = document.createElement('span');
+        const nm = im.closest('[data-id]')?.dataset.id || im.alt || '?';
+        let hue = 0; for (const c of String(nm)) hue = (hue * 31 + c.charCodeAt(0)) % 360;
+        sp.className = im.className + ' rph-ava-npc'; sp.style.background = `hsl(${hue},45%,40%)`;
+        sp.textContent = String(nm).replace(/^#\w+:/, '').trim().split(/\s+/).map(w => w[0] || '').join('').slice(0, 2).toUpperCase();
+        im.replaceWith(sp);
+    }, true);
     ['pointerdown', 'keydown'].forEach(ev => window.addEventListener(ev, markActivity, { passive: true }));
     eventSource.on(event_types.MESSAGE_SENT, markActivity);
     eventSource.on(event_types.CHAT_CHANGED, () => { scrollOffset = 0; renderButton(); renderBubbles(); });
@@ -3894,7 +6954,18 @@ jQuery(() => {
     window.addEventListener('resize', () => { clearTimeout(resizeT); resizeT = setTimeout(() => { if (isPhoneSkin()) renderBubbles(); }, 120); });
 
     // the initiative engine keeps ticking regardless of which chat is open — or none at all
+    // (2.1.2) how long the phone was away is read before the heartbeat moves the mark
+    awayFrom = Number(settings.lastSeen) || 0;
+    seenHeartbeat(); setInterval(seenHeartbeat, 5 * 60000);
+    setTimeout(catchupTick, 8000); setInterval(catchupTick, 60000);
+    setInterval(chatterTick, 60000);
+    setInterval(rumourTick, 60000);
+    setInterval(inviteTick, 30000);
     setInterval(initiativeTick, 60000);
+    setInterval(feedTick, 60000);
+    setInterval(unknownTick, 60000);
+    setInterval(remindersTick, 30000);
+    setInterval(mailTick, 60000);
     setTimeout(initiativeTick, 15000);
     setInterval(renderBubbles, 60000);   // refresh the "5 min ago" labels
 });
