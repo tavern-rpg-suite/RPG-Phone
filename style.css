@@ -2022,3 +2022,60 @@ img.rph-ava { object-fit: cover; object-position: 50% 18%; background: var(--ph-
 #rph-layer .rph-map-sheet, #rph-layer .rph-gal-view { animation: rph-sheet-up .26s cubic-bezier(.2, .8, .3, 1); }
 @keyframes rph-sheet-up { from { opacity: 0; transform: translateY(18px); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) { #rph-layer .rph-roster-in .rph-card.enter, #rph-layer .rph-map-sheet, #rph-layer .rph-gal-view { animation: none; } }
+
+/* ===== 2.1.6: long comment threads fold to the last two ===== */
+.rph-fd-cmts li.rph-fd-cmore { background: none; padding: 0 2px; }
+.rph-fd-cmore button { border: 0; background: none; padding: 2px 0; font: inherit; font-size: 12px; font-weight: 600; color: var(--ph-muted); cursor: pointer; }
+.rph-fd-cmore button:hover { text-decoration: underline; }
+.rph-fd-cmore button:focus-visible { outline: 2px solid var(--ph-accent); outline-offset: 2px; border-radius: 4px; }
+
+/* ===== 2.1.6: reactions under your message, and «Read» ===== */
+.rph-msg.mine:has(> .rph-under) { flex-wrap: wrap; }
+.rph-under { flex: 0 0 100%; display: flex; flex-direction: column; align-items: flex-end; }
+.rph-reacts { display: flex; justify-content: flex-end; gap: 3px; margin-top: -10px; margin-right: 8px; position: relative; z-index: 1; }
+.rph-react { display: inline-grid; place-items: center; min-width: 22px; height: 22px; padding: 0 4px; border-radius: 11px; background: var(--ph-in-bg, #fff); border: 1px solid var(--ph-in-border, rgba(0,0,0,.08)); box-shadow: 0 1px 4px rgba(0, 0, 0, .12); font-size: 12px; line-height: 1; animation: rph-react-pop .32s cubic-bezier(.2, .9, .3, 1.4); }
+@keyframes rph-react-pop { 0% { transform: scale(.4); opacity: 0; } 70% { transform: scale(1.15); opacity: 1; } 100% { transform: scale(1); } }
+.rph-seen { text-align: right; font-size: 10.5px; color: var(--ph-muted); margin: 2px 6px 0 0; }
+.rph-seen.noreply { font-style: italic; }
+#rph-layer:not(.rph-phone) .rph-seen { color: rgba(220, 230, 255, .75); }
+#rph-layer .rph-msg.noanim .rph-react { animation: none; }
+@media (prefers-reduced-motion: reduce) { .rph-react { animation: none; } }
+/* (2.1.6) a missed moment, and the way back to it */
+.rph-invite.missed { border-style: dashed; }
+.rph-invite .rph-replay { margin-left: auto; flex: none; padding: 4px 10px; font-size: 11.5px; white-space: nowrap; }
+.rph-invite .rph-replay i { font-size: .8em; margin: 0 2px 0 4px; }
+
+/* ===== 2.1.7: how readily someone speaks in a group ===== */
+.rph-talk-row { display: grid; grid-template-columns: minmax(0, 1fr) 110px auto; align-items: center; gap: 8px; margin: 6px 0; font-size: 12.5px; }
+.rph-talk-row > span { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 600; }
+.rph-talk-row input[type="range"] { width: 110px; accent-color: var(--ph-accent, #7fb0ff); }
+.rph-talk-v { font-size: 11px; min-width: 76px; color: var(--ph-muted, inherit); opacity: 1; }
+
+/* ===== 2.1.7: gifts for the player ===== */
+.rph-seg { display: flex; gap: 2px; padding: 2px; border-radius: 10px; background: color-mix(in srgb, currentColor 8%, transparent); margin-bottom: 8px; flex: none; }
+.rph-seg button { flex: 1; border: 0; background: none; color: inherit; font: inherit; font-size: 12.5px; font-weight: 600; padding: 6px 8px; border-radius: 8px; cursor: pointer; transition: background-color .08s ease-out; }
+.rph-seg button[aria-selected="true"] { background: var(--ph-in-bg, #fff); box-shadow: 0 1px 3px rgba(0, 0, 0, .12); color: var(--ph-in-ink, inherit); }
+.rph-seg button:focus-visible { outline: 2px solid var(--ph-accent); outline-offset: 1px; }
+.rph-mygifts { display: flex; flex-direction: column; gap: 8px; }
+.rph-mygift { display: flex; align-items: flex-start; gap: 10px; padding: 10px 11px; border-radius: 16px; background: var(--hs-card, rgba(255,255,255,.7)); border: 1px solid var(--hs-line, rgba(0,0,0,.08)); animation: rph-note-in .3s cubic-bezier(.2, .8, .3, 1) both; }
+.rph-mygift > .rph-ava { width: 34px; height: 34px; flex: none; }
+.rph-mygift-tx { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.rph-mygift-tx b { font-size: 13.5px; }
+.rph-mygift-tx small { font-size: 11px; color: var(--ph-muted); opacity: 1; }
+.rph-mygift-tx em { font-size: 12.5px; line-height: 1.4; }
+.rph-mygift .rph-gbtn { align-self: center; padding: 5px 12px; font-size: 12px; flex: none; }
+.rph-mygift .rph-fd-del { align-self: center; }
+.rph-mygift.wrapped b { font-style: italic; font-weight: 600; }
+/* the wrapped box in the chat */
+.rph-giftbox { display: flex; align-items: center; gap: 10px; min-width: 190px; padding: 10px 12px; border-radius: 14px; border: 1px dashed var(--ph-accent, #c9a); background: color-mix(in srgb, var(--ph-accent, #c9a) 9%, transparent); color: inherit; font: inherit; cursor: pointer; text-align: left; }
+.rph-gift-ic { width: 38px; height: 38px; flex: none; border-radius: 11px; display: grid; place-items: center; font-size: 18px; color: #fff; background: linear-gradient(135deg, var(--ph-accent, #c9a), color-mix(in srgb, var(--ph-accent, #c9a) 60%, #000)); box-shadow: 0 3px 8px rgba(0, 0, 0, .18); }
+.rph-giftbox:not(.open) .rph-gift-ic { animation: rph-gift-wiggle 2.6s ease-in-out infinite; }
+.rph-gift-tx { display: flex; flex-direction: column; min-width: 0; line-height: 1.3; }
+.rph-gift-tx small { font-size: 10.5px; opacity: .85; }
+.rph-gift-tx b { font-size: 13px; }
+.rph-giftbox.open { border-style: solid; cursor: zoom-in; }
+.rph-giftbox.unwrap .rph-gift-ic { animation: rph-gift-open .42s cubic-bezier(.2, .9, .3, 1.3); }
+.rph-giftbox:focus-visible { outline: 2px solid var(--ph-accent); outline-offset: 2px; }
+@keyframes rph-gift-wiggle { 0%, 88%, 100% { transform: rotate(0); } 91% { transform: rotate(-7deg); } 94% { transform: rotate(6deg); } 97% { transform: rotate(-3deg); } }
+@keyframes rph-gift-open { 0% { transform: scale(1); } 40% { transform: scale(1.25) rotate(-8deg); } 100% { transform: scale(1); } }
+@media (prefers-reduced-motion: reduce) { .rph-giftbox .rph-gift-ic, .rph-mygift { animation: none !important; } }

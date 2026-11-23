@@ -7,7 +7,7 @@ const OWN_GROUP_PREFIX = '#grp:';   // a group chat made on the phone (2.1.0)
 const UNKNOWN_PREFIX = '#unk:';     // a message from an unknown number (2.1.0)
 const GROUP_MAX = 6;                // members in one group, as before
 const UNSAFE_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
-const WALLET_DAILY = 10, WALLET_CAP = 300;   // (2.1.0) sparks a day, and the most the wallet holds
+const WALLET_DAILY = 20, WALLET_CAP = 300;   // (2.1.6) 20 a day, asked for by the author;   // (2.1.0) sparks a day, and the most the wallet holds
 
 /* ============================================================
    RPG PHONE
@@ -202,11 +202,13 @@ const defaults = {
     compressOver: 400,      // …longer than this many tokens (the old cut sat at the same size)
     briefs: {},             // the condensed cards, kept by card and the text they came from
     phoneView: 'home',      // (2.1.0) phone skins: 'home' | 'messages' | 'contacts' | 'chat' — what the screen shows
+    gifts: [],              // (2.1.7) gifts the player got: { id, what, note, from, ts, opened, chat }
+    talk: {},               // (2.1.7) person -> 0..100, how readily they speak in a group (50)
     muted: {},              // (2.1.5) contact -> true: does not write first or call, no sound; the feed still hears from them
     invites: {},            // (2.1.4) contact -> { what, from, made, at, state: open|kept|missed }
     catchupOn: true,        // (2.1.2) back after 6+ hours: what reached the phone meanwhile (one request a day)
     catchupDay: '', lastSeen: 0,
-    chatterOn: false,       // (2.1.2) a quiet group talks among themselves now and then — off until switched on
+    chatterOn: true,        // (2.1.2) a quiet group talks among themselves now and then (on since 2.1.7, as asked)
     chatterPerDay: 2, chatterDay: '', chatterCount: 0,
     feedOn: false,          // (2.1.0) «Лента»: the people on the phone post about their day — off until switched on
     feedEvery: 30,          // minutes between two batches of posts (only while the phone is out)
@@ -224,7 +226,7 @@ const defaults = {
     mail: [],               // [{ id, from, subject, text, kind, ts, read }]
     mailLast: 0,            // when the last letter came (at most one a day)
     songs: {},              // Music: person -> { list: [{ title, artist, why }], stamp }
-    wallet: 10,             // (2.1.0) Shop: the phone's own sparks — Vendors' coins are never touched
+    wallet: 20,             // (2.1.0) Shop: the phone's own sparks — Vendors' coins are never touched
     walletDay: '',          // the day the last daily sparks came
     shop: null,             // { items: [{ id, name, desc, price }], day }
     reminders: [],          // (2.1.0) Calendar: [{ id, date: 'YYYY-MM-DD', time: 'HH:MM'|'', text, fired }]
@@ -298,6 +300,12 @@ function loadSettings() {
     feedStore();
     settings.callChance = Math.max(0, Math.min(100, settings.callChance));
     for (const id of Object.keys(settings.unknown)) { const u = settings.unknown[id]; if (!id.startsWith(UNKNOWN_PREFIX) || !u || typeof u !== 'object' || typeof u.from !== 'string') delete settings.unknown[id]; }
+    // (2.1.7) the author asked for groups to talk among themselves: switched on once (can be turned off)
+    if (!settings.chatterSet217) { settings.chatterOn = true; settings.chatterSet217 = 1; }
+    if (!Array.isArray(settings.gifts)) settings.gifts = [];
+    settings.gifts = settings.gifts.filter(g => g && typeof g === 'object' && typeof g.id === 'string' && typeof g.what === 'string' && typeof g.from === 'string' && Number.isFinite(g.ts)).slice(-100);
+    if (!settings.talk || typeof settings.talk !== 'object' || Array.isArray(settings.talk)) settings.talk = {};
+    for (const k of Object.keys(settings.talk)) if (['__proto__', 'constructor', 'prototype'].includes(k) || !Number.isFinite(Number(settings.talk[k]))) delete settings.talk[k];
     if (!settings.muted || typeof settings.muted !== 'object' || Array.isArray(settings.muted)) settings.muted = {};
     for (const k of Object.keys(settings.muted)) if (['__proto__', 'constructor', 'prototype'].includes(k) || settings.muted[k] !== true) delete settings.muted[k];
     if (!settings.invites || typeof settings.invites !== 'object' || Array.isArray(settings.invites)) settings.invites = {};
@@ -384,7 +392,7 @@ const L = {
         set_fade: 'Затухание, %', regen_title: 'Перегенерировать ответ',
         group_chat: 'Групповой чат', cancel_title: 'Отменить', cancelled: 'Отменено.', cost_one: 'Один запрос к модели', cost_n: 'Запросов к модели: {n}',
         wg_soon: 'Скоро', wg_invite: 'Приглашение', clear_of: 'Очистить переписку: {name}',
-        app_shop: 'Магазин', coin_many: 'искры', coin_balance: 'Искр: {n}', shop_tip: 'Искры — деньги Телефона: {d} в день, пока ты им пользуешься, копится до {cap}. Монеты Вендоров не тратятся.',
+        app_shop: 'Магазин', coin_many: 'искры', coin_balance: 'Искр: {n}', shop_tip: 'Искры — деньги Телефона: {d} в день, пока ты им пользуешься, копится до {cap}.',
         shop_empty: 'Витрина пуста — открой её кнопкой ниже.', shop_refresh: 'Открыть витрину', shop_fresh: 'Новая витрина — завтра', shop_busy: 'Раскладываю товары…',
         shop_buy: 'Купить {name} за {n}', shop_to: 'Кому подарить', shop_cost: '{n} искр', shop_tag: 'подарок', shop_sent: 'Подарок отправлен: {name}',
         app_mail: 'Почта', mail_fetch: 'Проверить почту', mail_off_h: 'Почта выключена', mail_off_p: 'Иногда сюда будут приходить письма из мира истории: приглашения, счета, уведомления, документы, анонимки. Не чаще раза в день; каждое письмо — один запрос к модели.',
@@ -405,9 +413,9 @@ const L = {
         voice_try: 'Послушать', voice_manner: 'Манера', voice_m_none: 'Манера: обычная', voice_m_aristocrat: 'Манера: аристократ', voice_m_butler: 'Манера: дворецкий',
         voice_m_cutie: 'Манера: милашка', voice_m_tsundere: 'Манера: цундере', voice_m_own: 'Манера: своя', voice_own_ph: 'Например: тихо, с хрипотцой, чуть насмешливо',
         voice_sample: 'Привет. Это я, {name}. Так звучит мой голос.', voice_err: 'Голос не получился: {m}',
-        inv_in: 'через {n} мин', inv_go: 'сейчас — напишите или позвоните', inv_now: 'Ждёт вас: {what}', inv_kept_sys: 'вы успели: {what}', inv_missed_sys: 'приглашение пропущено: {what}', rum_true: 'Слух подтвердился — пишет {name}', rum_false: 'Слух не подтвердился — пишет {name}', rum_unclear: 'Слух пока не ясен — пишет {name}', rum_title: 'Слухи', rum_open: 'ждёт развязки', rum_v_true: 'подтвердился', rum_v_false: 'не подтвердился', rum_v_unclear: 'пока не ясно', unk_unknown: 'Неизвестный', unk_title: 'Неизвестные номера', unk_del: 'Удалить переписку', unk_kind_hint: 'намёк', unk_kind_warning: 'предупреждение', unk_kind_wrong: 'ошиблись номером', unk_kind_spam: 'спам',
+        replay_missed: 'вы не успели', replay_btn: 'Как это было', replay_tip: 'Персонаж расскажет, как всё прошло, будто вы были рядом', replay_poor: 'Нужно {n} искр', inv_in: 'через {n} мин', inv_go: 'сейчас — напишите или позвоните', inv_now: 'Ждёт вас: {what}', inv_kept_sys: 'вы успели: {what}', inv_missed_sys: 'приглашение пропущено: {what}', rum_true: 'Слух подтвердился — пишет {name}', rum_false: 'Слух не подтвердился — пишет {name}', rum_unclear: 'Слух пока не ясен — пишет {name}', rum_title: 'Слухи', rum_open: 'ждёт развязки', rum_v_true: 'подтвердился', rum_v_false: 'не подтвердился', rum_v_unclear: 'пока не ясно', unk_unknown: 'Неизвестный', unk_title: 'Неизвестные номера', unk_del: 'Удалить переписку', unk_kind_hint: 'намёк', unk_kind_warning: 'предупреждение', unk_kind_wrong: 'ошиблись номером', unk_kind_spam: 'спам',
         blk_title: 'Заблокированные', blk_state: 'заблокирован(а)', blk_on: 'Заблокировать', blk_off: 'Разблокировать', blk_cant: 'Контакт заблокирован — разблокируй его в «Контактах», чтобы написать.',
-        mute_on: 'Заглушить', mute_off: 'Включить звук', mute_state: 'без звука', hid_state: 'скрытый чат', hid_on: 'Скрыть чат', hid_off: 'Показать чат', sec_title: 'Тайны', sec_p: 'Скрытый чат пропадает из «Сообщений», главного экрана и экрана блокировки — открыть его можно только отсюда. Заблокированный контакт не пишет и не звонит. Заглушённый не пишет первым, не звонит и не шумит, но в Ленте остаётся — постит и ставит реакции.',
+        talk_title: 'В групповых чатах', talk_p: 'Как охотно человек отвечает, когда пишут всем. Если обратиться по имени — ответит в любом случае.', talk_shy: 'тихоня', talk_quiet: 'скорее молчит', talk_mid: 'как обычно', talk_chatty: 'разговорчивый', talk_loud: 'болтун', gift_open: 'Открыть', gift_del: 'Удалить подарок', gift_none: 'Подарков пока нет. Иногда кто-то присылает что-нибудь просто так.', shop_window: 'Витрина', shop_mine: 'Мои подарки', gift_from: 'Подарок от {name}', gift_wrapped: 'Вам подарок — от {name}', gift_tap: 'Нажмите, чтобы открыть', seen: 'Прочитано', seen_noreply: 'Прочитано · без ответа', mute_on: 'Заглушить', mute_off: 'Включить звук', mute_state: 'без звука', hid_state: 'скрытый чат', hid_on: 'Скрыть чат', hid_off: 'Показать чат', sec_title: 'Тайны', sec_p: 'Скрытый чат пропадает из «Сообщений», главного экрана и экрана блокировки — открыть его можно только отсюда. Заблокированный контакт не пишет и не звонит. Заглушённый не пишет первым, не звонит и не шумит, но в Ленте остаётся — постит и ставит реакции.',
         set_unk: 'Тайны', set_unk_on: 'SMS с неизвестных номеров', set_unk_tip: 'Намёк на то, что происходит в истории, предупреждение, «ошиблись номером» или спам этого мира. Не чаще раза в день, не в тихие часы. Каждое — один запрос.',
         rel_tab: 'История', rel_setup: 'Настройка', rel_met: 'знакомы с {d}', rel_msgs: 'сообщений: {n}', rel_calls: 'звонков: {n} · {d}', rel_trust: 'доверие {n}/100',
         rel_none: 'Пока вас ничего не связывает — напиши первой.', rel_photos: 'Фото от персонажа', rel_moments: 'Важные моменты', rel_no_moments: 'Пока пусто. Подарки и события из Дневника появятся здесь сами; «Вспомнить» найдёт в переписке обещания, признания и памятные даты.',
@@ -420,7 +428,7 @@ const L = {
         set_calls_tip: 'Только в обложках-телефонах. Звонок идёт по тем же правилам, что и «пишут первыми»: тихие часы и лимит в день. Голосовое — ещё один запрос.',
         app_feed: 'Лента', feed_nobody: 'В ленте некому писать — добавь кого-нибудь в «Контакты».', feed_bad: 'Модель ответила, но не в том виде, который Лента умеет прочитать — попробуй ещё раз или другую модель.',
         feed_note: '{name} опубликовал(а) пост:', feed_draw: 'Проявить фото', feed_drawing: 'Проявляю…', feed_like: 'Нравится', feed_comments: 'комментариев: {n}',
-        feed_comment_ph: 'Комментарий…', feed_send: 'Отправить', catchup_note: 'Пока вас не было: новых — {n}', feed_del: 'Удалить пост', feed_cdel: 'Удалить комментарий', feed_clear: 'Очистить ленту', feed_clear_sure: 'Нажмите ещё раз — удалится вся лента', feed_cleared: 'Лента очищена', feed_stories: 'Истории за день', feed_you: 'вам', feed_liked_one: 'Нравится {name}', feed_liked_more: 'Нравится {name} и ещё {n}', feed_story_new: 'новое', feed_more: 'Новые посты', feed_off_h: 'Лента выключена',
+        feed_comment_ph: 'Комментарий…', feed_send: 'Отправить', catchup_note: 'Пока вас не было: новых — {n}', feed_cmore: 'Ещё комментарии: {n}', feed_cless: 'Свернуть комментарии', feed_del: 'Удалить пост', feed_cdel: 'Удалить комментарий', feed_clear: 'Очистить ленту', feed_clear_sure: 'Нажмите ещё раз — удалится вся лента', feed_cleared: 'Лента очищена', feed_stories: 'Истории за день', feed_you: 'вам', feed_liked_one: 'Нравится {name}', feed_liked_more: 'Нравится {name} и ещё {n}', feed_story_new: 'новое', feed_more: 'Новые посты', feed_off_h: 'Лента выключена',
         feed_off_p: 'Здесь персонажи с телефона сами пишут посты о своём дне и комментируют друг друга. Каждая пачка постов — один запрос к модели, твой комментарий — ещё один.',
         feed_turn_on: 'Включить ленту', feed_empty: 'Пока пусто — первые посты появятся сами или по кнопке ↻ сверху.', feed_loading: 'Пишут…',
         set_world: 'Мир живёт без вас', set_catchup_on: 'Сводка после перерыва', set_catchup_tip: 'Если вас не было 6+ часов: пара сообщений в чатах, пост, пропущенный звонок — с настоящим временем. Один запрос в день.', set_chatter_on: 'Группы болтают без вас', set_chatter_tip: 'Тихая 3+ часа группа сама обсуждает свои дела. До 2 раз в день, не в тихие часы, каждый раз — один запрос.',
@@ -508,7 +516,7 @@ const L = {
         set_fade: 'Fade, %', regen_title: 'Regenerate the reply',
         group_chat: 'Group chat', cancel_title: 'Cancel', cancelled: 'Cancelled.', cost_one: 'One request to the model', cost_n: '{n} requests to the model',
         wg_soon: 'Coming up', wg_invite: 'An invite', clear_of: 'Clear the conversation: {name}',
-        app_shop: 'Shop', coin_many: 'sparks', coin_balance: '{n} sparks', shop_tip: 'Sparks are the phone\'s money: {d} a day while you use it, up to {cap}. Vendors\' coins are never spent.',
+        app_shop: 'Shop', coin_many: 'sparks', coin_balance: '{n} sparks', shop_tip: 'Sparks are the phone\'s money: {d} a day while you use it, up to {cap}.',
         shop_empty: 'The window is empty — open it with the button below.', shop_refresh: 'Open the window', shop_fresh: 'A new window tomorrow', shop_busy: 'Setting out the goods…',
         shop_buy: 'Buy {name} for {n}', shop_to: 'Who is it for', shop_cost: '{n} sparks', shop_tag: 'gift', shop_sent: 'Gift sent: {name}',
         app_mail: 'Mail', mail_fetch: 'Check mail', mail_off_h: 'Mail is off', mail_off_p: 'Now and then letters from the story\'s world come here: invitations, bills, notices, documents, anonymous letters. At most once a day; each letter is one request to the model.',
@@ -529,11 +537,11 @@ const L = {
         voice_try: 'Listen', voice_manner: 'Manner', voice_m_none: 'Manner: plain', voice_m_aristocrat: 'Manner: aristocrat', voice_m_butler: 'Manner: butler',
         voice_m_cutie: 'Manner: sweetheart', voice_m_tsundere: 'Manner: tsundere', voice_m_own: 'Manner: my own', voice_own_ph: 'For example: quiet, a little husky, faintly mocking',
         voice_sample: 'Hello. It\'s me, {name}. This is how my voice sounds.', voice_err: 'The voice did not work: {m}',
-        inv_in: 'in {n} min', inv_go: 'now — write or call', inv_now: 'Waiting for you: {what}', inv_kept_sys: 'you made it: {what}', inv_missed_sys: 'invite missed: {what}',
+        replay_missed: 'you missed it', replay_btn: 'How it was', replay_tip: 'They tell how it went, as if you had been there', replay_poor: 'You need {n} sparks', inv_in: 'in {n} min', inv_go: 'now — write or call', inv_now: 'Waiting for you: {what}', inv_kept_sys: 'you made it: {what}', inv_missed_sys: 'invite missed: {what}',
         rum_true: 'The rumour came true — {name} writes', rum_false: 'The rumour was false — {name} writes', rum_unclear: 'The rumour is still unclear — {name} writes', rum_title: 'Rumours', rum_open: 'waiting for an answer', rum_v_true: 'came true', rum_v_false: 'was false', rum_v_unclear: 'still unclear',
         unk_unknown: 'Unknown', unk_title: 'Unknown numbers', unk_del: 'Delete the conversation', unk_kind_hint: 'a hint', unk_kind_warning: 'a warning', unk_kind_wrong: 'wrong number', unk_kind_spam: 'spam',
         blk_title: 'Blocked', blk_state: 'blocked', blk_on: 'Block', blk_off: 'Unblock', blk_cant: 'This contact is blocked — unblock them in Contacts to write.',
-        mute_on: 'Mute', mute_off: 'Unmute', mute_state: 'muted', hid_state: 'hidden chat', hid_on: 'Hide the chat', hid_off: 'Show the chat', sec_title: 'Secrets', sec_p: 'A hidden chat leaves Messages, the home screen and the lock screen — it opens only from here. A blocked contact neither writes nor calls. A muted one does not write first, call or make a sound, but stays in the Feed — posting and reacting.',
+        talk_title: 'In group chats', talk_p: 'How readily they answer a message to everyone. Named, they answer anyway.', talk_shy: 'shy', talk_quiet: 'rather quiet', talk_mid: 'as usual', talk_chatty: 'talkative', talk_loud: 'chatterbox', gift_open: 'Open', gift_del: 'Delete the gift', gift_none: 'No gifts yet. Now and then someone sends something just because.', shop_window: 'Window', shop_mine: 'My gifts', gift_from: 'A gift from {name}', gift_wrapped: '{name} sent you a gift', gift_tap: 'Tap to open', seen: 'Read', seen_noreply: 'Read · no reply', mute_on: 'Mute', mute_off: 'Unmute', mute_state: 'muted', hid_state: 'hidden chat', hid_on: 'Hide the chat', hid_off: 'Show the chat', sec_title: 'Secrets', sec_p: 'A hidden chat leaves Messages, the home screen and the lock screen — it opens only from here. A blocked contact neither writes nor calls. A muted one does not write first, call or make a sound, but stays in the Feed — posting and reacting.',
         set_unk: 'Secrets', set_unk_on: 'SMS from unknown numbers', set_unk_tip: 'A hint at what is happening in the story, a warning, a wrong number or this world\'s spam. At most once a day, never in the quiet hours. Each is one request.',
         rel_tab: 'History', rel_setup: 'Setup', rel_met: 'met on {d}', rel_msgs: '{n} messages', rel_calls: '{n} calls · {d}', rel_trust: 'trust {n}/100',
         rel_none: 'Nothing links you yet — write first.', rel_photos: 'Photos from them', rel_moments: 'Moments that matter', rel_no_moments: 'Nothing yet. Gifts and events from the Diary appear here on their own; "Remember" finds promises, confessions and dates in your texts.',
@@ -546,7 +554,7 @@ const L = {
         set_calls_tip: 'Phone skins only. A call follows the same rules as texting first: quiet hours and the daily limit. A voice message is one more request.',
         app_feed: 'Feed', feed_nobody: 'Nobody to post in the feed — add someone in Contacts.', feed_bad: 'The model answered, but not in a form the Feed can read — try again or another model.',
         feed_note: '{name} posted:', feed_draw: 'Develop the photo', feed_drawing: 'Developing…', feed_like: 'Like', feed_comments: '{n} comments',
-        feed_comment_ph: 'Comment…', feed_send: 'Send', catchup_note: 'While you were away: {n} new', feed_del: 'Delete the post', feed_cdel: 'Delete the comment', feed_clear: 'Clear the feed', feed_clear_sure: 'Tap again — the whole feed goes', feed_cleared: 'The feed is cleared', feed_stories: 'Stories of the day', feed_you: 'you', feed_liked_one: 'Liked by {name}', feed_liked_more: 'Liked by {name} and {n} more', feed_story_new: 'new', feed_more: 'New posts', feed_off_h: 'The feed is off',
+        feed_comment_ph: 'Comment…', feed_send: 'Send', catchup_note: 'While you were away: {n} new', feed_cmore: '{n} more comments', feed_cless: 'Fold the comments', feed_del: 'Delete the post', feed_cdel: 'Delete the comment', feed_clear: 'Clear the feed', feed_clear_sure: 'Tap again — the whole feed goes', feed_cleared: 'The feed is cleared', feed_stories: 'Stories of the day', feed_you: 'you', feed_liked_one: 'Liked by {name}', feed_liked_more: 'Liked by {name} and {n} more', feed_story_new: 'new', feed_more: 'New posts', feed_off_h: 'The feed is off',
         feed_off_p: 'Here the people on your phone post about their day and comment on each other. Each batch of posts is one request to the model; each comment of yours is one more.',
         feed_turn_on: 'Turn the feed on', feed_empty: 'Nothing yet — the first posts come on their own, or with ↻ above.', feed_loading: 'Writing…',
         set_world: 'The world goes on', set_catchup_on: 'Catch-up after a break', set_catchup_tip: 'Away for 6+ hours: a few texts in the chats, a post, a missed call — at real times. One request a day.', set_chatter_on: 'Groups talk without you', set_chatter_tip: 'A group quiet for 3+ hours talks about its own business. Up to twice a day, never in the quiet hours, one request each time.',
@@ -2721,17 +2729,22 @@ ${reasonLine || ''}`;
 }
 
 function shuffled(list) { const a = list.slice(); for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; }
-async function generateReply(names, reasonLine, isInitiative, contactId) {
+async function generateReply(names, reasonLine, isInitiative, contactId, opts = {}) {
     const primary = contactId || names[0];
     const th = threadOf(primary);
     const lastTs = th.length ? th[th.length - 1].ts : 0;
+    // (2.1.7) in a group the code decides who speaks; the model only writes their lines
+    const cast = isGroup(primary) ? (opts.director || (isInitiative ? null : pickResponders(primary, lastUserText(primary)))) : null;
     // (2.1.0) a group's cards come in a new order every time: the model used to answer «first, second,
     // third» in the order the cards stood
     const sys = await buildSystem(isGroup(primary) ? shuffled(names) : names, reasonLine);
     const head = [timeContext(lastTs), diaryBlock(names, primary)];
     const tail = [
-        isGroup(primary) ? `[This is a GROUP chat. Not everyone answers every time — only those who have a reason to: whoever was addressed, whoever cares about the topic, whoever is free right now. Members react to EACH OTHER too, not only to ${name1 || 'the player'}: reply, tease, agree, argue, pick up what someone else said. No fixed order and no "one line each in turn": someone may stay silent, someone may send two lines in a row.]` : '',
+        isGroup(primary) && cast && !opts.directorInLine ? directorLine(cast) :
+        isGroup(primary) && !cast ? `[This is a GROUP chat. Not everyone answers every time — only those who have a reason to: whoever was addressed, whoever cares about the topic, whoever is free right now. Members react to EACH OTHER too, not only to ${name1 || 'the player'}: reply, tease, agree, argue, pick up what someone else said. No fixed order and no "one line each in turn": someone may stay silent, someone may send two lines in a row.]` : '',
         inviteAllowed(primary) ? INVITE_RULE.split('{{user}}').join(name1 || 'the player') : '',
+        isInitiative ? '' : REACT_RULE.split('{{user}}').join(name1 || 'the player'),
+        giftAllowed(primary) ? GIFT_RULE.split('{{user}}').join(name1 || 'the player') : '',
         isInitiative
             ? '[Write the next message(s) NOW, on your own initiative. Do not greet formally; continue naturally from everything above.]'
             : '[Write your reply now.]'
@@ -2754,7 +2767,8 @@ async function generateReply(names, reasonLine, isInitiative, contactId) {
     }
 
     const raw = await callAIComplete(sys, user);
-    return takeInvite(parseReply(raw, names.concat(['SYSTEM']), castOfContact(primary)), primary);
+    const got = takeGift(takeReacts(takeInvite(parseReply(raw, names.concat(['SYSTEM']), castOfContact(primary)), primary), primary), primary);
+    return cast ? keepCast(got, cast) : got;
 }
 
 /* ============================================================
@@ -2768,6 +2782,156 @@ async function generateReply(names, reasonLine, isInitiative, contactId) {
 const INVITE_RULE = `[Rarely — at most once in a long while, and only when it truly fits — you may invite {{user}} to share a moment across the worlds at a set time: "call me in 20 minutes", "at nine I'll be on the roof — look at the moon with me", "stay with me on the line while I walk home". You both know you can never meet in person — never suggest meeting physically. If you do invite, put it on its own line: [invite: <minutes from now, 5–120> | <what, a few words>]]`;
 const INVITE_MISSED_LINE = `[{{user}} missed your invite: "{{what}}". You did it alone. React in character — briefly, maybe a little wistful; no guilt-tripping.]`;
 const RE_INVITE = /\[\s*invite\s*:\s*(\d{1,3})\s*(?:min\w*|мин\w*)?\s*\|\s*([^\]\n]{2,120})\]/i;
+/* REACTIONS AND «READ» (2.1.6, approved). Someone may answer with an emoji on the player's message
+   instead of (or besides) words, and now and then leave it read without a reply — silence says
+   something too. Every answered message shows «Read». At most one emoji per person per reply;
+   «left on read» at most once a day per contact (more is ignored). */
+const REACT_RULE = `[Sometimes, instead of words or besides them, you may react to {{user}}'s last message with one emoji on its own line: [react: ❤️]. Very rarely, when it truly fits your mood, you may leave it read without answering: then write only [read].]`;
+const RE_REACT = /^\s*\[\s*react\s*:\s*([^\]\s]{1,8})\s*\]\s*$/i;
+const RE_READ = /^\s*\[\s*(?:read|seen|left on read|прочитано)\s*\]\s*$/i;
+function takeReacts(msgs, id) {
+    const th = threadOf(id);
+    let last = null;
+    for (let k = th.length - 1; k >= 0; k--) if (th[k].who === 'user') { last = th[k]; break; } else if (th[k].who === 'char' && !/^\[SYSTEM:/.test(String(th[k].text || ''))) break;
+    const out = [];
+    let read = false;
+    for (const m of msgs) {
+        const t1 = String(m.text || '').trim();
+        const r = RE_REACT.exec(t1);
+        if (r) {
+            const e = r[1];
+            // an emoji, not a word
+            if (last && !/[\p{L}\p{N}]/u.test(e)) {
+                if (!Array.isArray(last.reacts)) last.reacts = [];
+                if (!last.reacts.some(x => x.by === m.name) && last.reacts.length < 4) last.reacts.push({ e, by: m.name });
+            }
+            continue;
+        }
+        if (RE_READ.test(t1)) { read = true; continue; }
+        out.push(m);
+    }
+    if (last) {
+        if (out.length || (last.reacts && last.reacts.length)) last.seen = 1;
+        else if (read) {
+            const day = new Date().toDateString(), st = stateOf(id);
+            if (st.readDay !== day) { st.readDay = day; last.seen = 'noreply'; out.leftOnRead = true; }
+            else last.seen = 1;
+        }
+    }
+    if (!out.length && last && last.reacts && last.reacts.length) out.leftOnRead = true;   // an emoji alone is an answer
+    editRev++;            // the bubble under it changes even when no new message comes
+    saveSettings();
+    return out;
+}
+/* WHO SPEAKS IN A GROUP (2.1.7, approved) — the way Tavern's own group chats do it: whoever was
+   named answers; a message to everyone gets one or two people, the talkative and the idle more
+   likely, the busy and the asleep less; sometimes a second one picks up what the first said.
+   The model writes only their lines, and lines for anyone else are dropped. */
+const DIRECTOR_LINE = `[This is a GROUP chat. Answering NOW: {{who}}. Everyone else stays silent this time — do not write lines for them. {{chime}}Talk like people in a group chat: short, natural, reacting to what was just said.]`;
+const CHIME_LINE = `{{second}} may add one short line reacting to {{first}} — not to {{user}}. `;
+function lastUserText(id) { const th = threadOf(id); for (let k = th.length - 1; k >= 0 && k >= th.length - 6; k--) if (th[k].who === 'user') return String(th[k].text || ''); return ''; }
+function talkWord(v) { return t(v <= 15 ? 'talk_shy' : v <= 40 ? 'talk_quiet' : v < 65 ? 'talk_mid' : v < 85 ? 'talk_chatty' : 'talk_loud'); }
+function talkOf(n) { const v = Number((settings.talk || {})[n]); return Number.isFinite(v) ? Math.max(0, Math.min(100, v)) : 50; }
+function mentionedIn(text, name) {
+    const low = ' ' + String(text || '').toLowerCase().replace(/[^\p{L}\p{N}@]+/gu, ' ') + ' ';
+    const forms = [name, String(name).split(/\s+/)[0], ...aliasesOf(name)].map(x => String(x || '').trim().toLowerCase()).filter(x => x.length >= 3);
+    return forms.some(f => low.includes(' ' + f.replace(/[^\p{L}\p{N}]+/gu, ' ').trim() + ' ') || low.includes(' @' + f.split(' ')[0] + ' '));
+}
+function pickResponders(id, text) {
+    const people = contactMembers(id).concat(castOfContact(id)).filter((x, i, a) => x && a.indexOf(x) === i && x !== name1);
+    if (people.length < 2) return null;
+    const named = people.filter(n => mentionedIn(text, n));
+    if (named.length) return { who: named, chime: null };   // everyone she named answers
+    const th = threadOf(id);
+    const lastSpoke = n => { for (let k = th.length - 1; k >= 0; k--) if (th[k].who === 'char' && th[k].name === n) return th.length - k; return 99; };
+    const weight = n => {
+        let w = 0.15 + talkOf(n) / 100 * 1.4;
+        w *= 1 + Math.min(6, lastSpoke(n)) * 0.12;            // someone who has been quiet a while is due
+        const st = statusOf(n).toLowerCase();
+        if (/sleep|asleep|спит|сон|дремл/.test(st)) w *= 0.15;
+        else if (/work|busy|shift|занят|работ|смен/.test(st)) w *= 0.5;
+        if (talkOf(n) <= 10) w *= 0.15;                         // a quiet one speaks when spoken to
+        return w;
+    };
+    const draw = (pool) => { const tot = pool.reduce((a, n) => a + weight(n), 0); let r = Math.random() * tot; for (const n of pool) { r -= weight(n); if (r <= 0) return n; } return pool[pool.length - 1]; };
+    const first = draw(people);
+    // a shy one never joins in on their own — only the first voice can (rarely) be them
+    const rest = people.filter(n => n !== first && talkOf(n) > 15);
+    const who = [first];
+    // a second voice for everyone-messages, more often with chatty people
+    if (rest.length && Math.random() < 0.18 + talkOf(first) / 100 * 0.1) who.push(draw(rest));
+    let chime = null;
+    const left = people.filter(n => !who.includes(n) && talkOf(n) > 15);
+    if (who.length === 1 && left.length && Math.random() < 0.3) { const second = draw(left); chime = { first, second }; }
+    return { who, chime };
+}
+function directorLine(cast) {
+    const u = name1 || 'the player';
+    const chime = cast.chime ? CHIME_LINE.split('{{second}}').join(cast.chime.second).split('{{first}}').join(cast.chime.first).split('{{user}}').join(u) : '';
+    return DIRECTOR_LINE.split('{{who}}').join(cast.who.join(', ')).split('{{chime}}').join(chime).split('{{user}}').join(u);
+}
+// lines for people who were not to speak are dropped; at most three lines each
+function keepCast(msgs, cast) {
+    const ok = new Set(cast.who.concat(cast.chime ? [cast.chime.second] : []).map(x => x.toLowerCase()));
+    const per = {};
+    const out = msgs.filter(m => {
+        if (m.name === 'SYSTEM') return true;
+        const k = String(m.name || '').toLowerCase();
+        if (!ok.has(k)) return false;
+        per[k] = (per[k] || 0) + 1;
+        return per[k] <= 3;
+    });
+    out.leftOnRead = msgs.leftOnRead;
+    return out.length || msgs.leftOnRead ? out : msgs;      // nothing left — better their words than silence
+}
+/* GIFTS FOR THE PLAYER (2.1.7, approved). Now and then someone sends the player a little something
+   that can travel through the phone. It arrives wrapped; a tap unwraps it; it is kept in the Shop
+   under «My gifts» (to look at again or delete). At most one a day from anyone, one in three days
+   from the same person — the rule goes to the model only then, and only sometimes. */
+const GIFT_RULE = `[Very rarely — only when it truly fits (a reason, a feeling, an occasion) — you may send {{user}} a small gift across the worlds: something that can travel through the phone (a pressed flower, a photo, a song, a little charm, a letter). Put it on its own line: [gift for you: <the gift, a few words> | <a short note from you>]]`;
+const RE_GIFT_ME = /\[\s*gift\s+for\s+you\s*:\s*([^\]|\n]{2,80})(?:\|\s*([^\]\n]{0,200}))?\]/i;
+let giftRoll = { id: '', ts: 0, ok: false };
+function giftOf(m, what) {
+    const g = Array.isArray(settings.gifts) ? settings.gifts : [];
+    return g.filter(x => x.what === what && (x.from === m.name || x.chat === m.name)).sort((a, b) => Math.abs(a.ts - m.ts) - Math.abs(b.ts - m.ts))[0] || null;
+}
+function giftAllowed(id) {
+    if (!id || isUnknown(id) || settings.muted[id] || settings.blocked[id]) return false;
+    const g = Array.isArray(settings.gifts) ? settings.gifts : [];
+    const now = Date.now();
+    if (g.some(x => now - x.ts < 20 * 3600000)) return false;
+    const members = isGroup(id) ? contactMembers(id) : [id];
+    if (members.every(n => g.some(x => x.from === n && now - x.ts < 3 * 86400000))) return false;
+    // decided once per request: about one in four replies even carries the rule
+    if (giftRoll.id !== id || now - giftRoll.ts > 2000) giftRoll = { id, ts: now, ok: Math.random() < 0.25 };
+    return giftRoll.ok;
+}
+function takeGift(msgs, id) {
+    const out = [];
+    let taken = false;
+    for (const m of msgs) {
+        const mm = RE_GIFT_ME.exec(String(m.text || ''));
+        if (!mm) { out.push(m); continue; }
+        const what = cleanLine(mm[1], 80), note = cleanLine(mm[2] || '', 200);
+        const from = m.name && m.name !== 'SYSTEM' ? m.name : (isGroup(id) ? contactMembers(id)[0] : id);
+        if (!taken && what && Date.now() - (giftRoll.ts || 0) < 600000 && giftRoll.ok) {
+            taken = true;
+            if (!Array.isArray(settings.gifts)) settings.gifts = [];
+            const gid = 'g' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+            settings.gifts.push({ id: gid, what, note, from, ts: Date.now(), opened: false, chat: id });
+            if (settings.gifts.length > 100) settings.gifts.splice(0, settings.gifts.length - 100);
+            out.push({ ...m, text: `[gift for you: ${what}]`, gift: gid });
+            setTimeout(() => notify(from, t('gift_wrapped', { name: from }), id), 1200);
+            if (note) out.push({ ...m, text: note });
+            giftRoll.ok = false;
+        }
+        const rest = String(m.text).replace(RE_GIFT_ME, '').trim();
+        if (rest) out.push({ ...m, text: rest });
+    }
+    out.leftOnRead = msgs.leftOnRead;
+    if (taken) saveSettings();
+    return out;
+}
 function invitesToday() { const d = new Date().toDateString(); return Object.values(settings.invites || {}).filter(v => v && new Date(v.made).toDateString() === d).length; }
 function inviteAllowed(id) {
     if (!id || isGroup(id) || isUnknown(id) || settings.muted[id]) return false;
@@ -2830,8 +2994,30 @@ async function inviteTick() {
     // old invites leave after two days
     for (const [id, v] of Object.entries(settings.invites || {})) if (!v || (v.state !== 'open' && Date.now() - (v.missedAt || v.at) > 2 * 86400000)) delete settings.invites[id];
 }
+// (2.1.6, approved) a missed moment can be bought back with sparks: they tell how it was, as if you were there
+const REPLAY_COST = 15;
+const REPLAY_LINE = `[{{user}} missed your invite: "{{what}}", but now asks how it was. Tell them about it as if they had been there with you — a few warm, vivid messages, in character.]`;
+async function replayMoment(id) {
+    const v = (settings.invites || {})[id];
+    if (!v || v.state !== 'missed' || busy || !apiKey()) return;
+    dailySparks();
+    if ((settings.wallet || 0) < REPLAY_COST) { toastr.info(t('replay_poor', { n: REPLAY_COST })); return; }
+    settings.wallet -= REPLAY_COST; v.state = 'replayed'; saveSettings(); renderBubbles();
+    const rq = beginRequest(id); renderBubbles();
+    try {
+        const msgs = await generateReply(contactMembers(id), '\n' + REPLAY_LINE.split('{{user}}').join(name1 || 'the player').split('{{what}}').join(v.what.replace(/"/g, "'")), true, id);
+        if (isCurrent(rq)) { if (!msgs.length) { settings.wallet += REPLAY_COST; v.state = 'missed'; toastr.info(t('err')); } else await deliverReply(id, msgs, rq); }
+    } catch (e) { settings.wallet += REPLAY_COST; v.state = 'missed'; requestFailed(e, rq, 'reply'); }
+    saveSettings();
+    if (!isCurrent(rq)) return;
+    finishRequest(rq); renderBubbles(); renderButton();
+}
 function inviteBar(id) {
     const v = (settings.invites || {})[id];
+    if (v && v.state === 'missed' && !settings.muted[id]) {
+        const can = (settings.wallet || 0) >= REPLAY_COST;
+        return `<div class="rph-invite missed" role="status"><i class="fa-solid fa-moon" aria-hidden="true"></i><span><b>${escapeHtml(v.what)}</b><small>${escapeHtml(t('replay_missed'))}</small></span><button type="button" class="rph-gbtn quiet rph-replay" data-id="${escapeHtml(id)}"${can && !busy ? '' : ' disabled'} title="${escapeHtml(can ? t('replay_tip') : t('replay_poor', { n: REPLAY_COST }))}" aria-label="${escapeHtml(t('replay_btn') + ' · ' + t('coin_balance', { n: REPLAY_COST }))}">${escapeHtml(t('replay_btn'))} <i class="fa-solid fa-star-of-life" aria-hidden="true"></i>${REPLAY_COST}</button></div>`;
+    }
     if (!v || v.state !== 'open') return '';
     const mins = Math.round((v.at - Date.now()) / 60000);
     return `<div class="rph-invite${mins <= 0 ? ' now' : ''}" role="status"><i class="fa-solid fa-hourglass-half" aria-hidden="true"></i><span><b>${escapeHtml(v.what)}</b><small>${escapeHtml(mins > 0 ? t('inv_in', { n: mins }) : t('inv_go'))}</small></span></div>`;
@@ -2925,7 +3111,7 @@ async function sendAttachments(fileList, onAccepted) {
     try {
         const msgs = await generateReply(names, '', false, cur);
         if (isCurrent(rq)) {
-            if (!msgs.length) toastr.info(t('err'));
+            if (!msgs.length && !msgs.leftOnRead) toastr.info(t('err'));
             await deliverReply(cur, msgs, rq);
         }
     } catch (e) {
@@ -3017,7 +3203,7 @@ async function sendUserText(text) {
     try {
         const msgs = await generateReply(names, '', false, cur);
         if (isCurrent(rq)) {
-            if (!msgs.length) toastr.info(t('err'));
+            if (!msgs.length && !msgs.leftOnRead) toastr.info(t('err'));
             await deliverReply(cur, msgs, rq);
         }
     } catch (e) {
@@ -3051,7 +3237,7 @@ async function regenerateAfter(ts) {
     try {
         const msgs = await generateReply(names, '', false, cur);
         if (isCurrent(rq)) {
-            if (!msgs.length) toastr.info(t('err'));
+            if (!msgs.length && !msgs.leftOnRead) toastr.info(t('err'));
             await deliverReply(cur, msgs, rq);
         }
     } catch (e) {
@@ -3430,6 +3616,7 @@ function renderPhoneTop(cur) {
     if (ava.dataset.who !== who) { ava.innerHTML = avaHtml; ava.dataset.who = who; }
     $('#rph-layer .rph-top-name').text(label);
     const typing = busy && cur && busyFor === cur;
+    { const sl = document.getElementById('rph-invite-slot'); if (sl && !sl.dataset.wired) { sl.dataset.wired = '1'; sl.addEventListener('click', e => { const b = e.target.closest('.rph-replay'); if (b && !b.disabled) replayMoment(String(b.dataset.id)); }); } }
     { const sl = document.getElementById('rph-invite-slot'); if (sl) { const h = cur ? inviteBar(cur) : ''; if (sl.dataset.sig !== h) { sl.innerHTML = h; sl.dataset.sig = h; } } }
     $('#rph-layer .rph-top-sub').text(typing ? (typingName ? t('typing_who', { name: typingName }) : t('typing')) : (cur ? (isGroup(cur) ? t('grp_members', { n: contactMembers(cur).length }) : (statusOf(cur) || t('online'))) : '')).toggleClass('typing', !!typing);
 }
@@ -3979,7 +4166,7 @@ function feedPostHtml(x) {
             <button type="button" class="rph-fd-cbtn${feedReplyOpen === x.id ? ' on' : ''}" data-fd="reply" data-id="${escapeHtml(x.id)}" aria-expanded="${feedReplyOpen === x.id}" aria-label="${escapeHtml(t('feed_comment_ph'))}"><i class="fa-solid fa-comment" aria-hidden="true"></i><span class="rph-fd-n">${cm.length}</span></button>
         </div>
         ${likedBy(x)}
-        ${cm.length || x.waiting ? `<ul class="rph-fd-cmts">${cm.map(c => { const k = x.comments.indexOf(c), sure = feedSure === 'c:' + x.id + ':' + k; return `<li class="${c.who === 'user' ? 'mine' : ''}${justNow(c) ? ' fresh' : ''}">${c.who === 'user' ? '' : avatarHtml(c.author)}<span><b>${escapeHtml(c.who === 'user' ? t('pv_you') : c.author)}</b> ${escapeHtml(c.text)}</span><button type="button" class="rph-fd-cdel${sure ? ' sure' : ''}" data-fd="cdel" data-id="${escapeHtml(x.id)}" data-k="${k}" aria-label="${escapeHtml(t(sure ? 'msg_del_sure' : 'feed_cdel'))}" title="${escapeHtml(t(sure ? 'msg_del_sure' : 'feed_cdel'))}"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button></li>`; }).join('')}${x.waiting ? `<li class="rph-fd-typing">•••</li>` : ''}</ul>` : ''}
+        ${cm.length || x.waiting ? `<ul class="rph-fd-cmts">${cm.length > 2 ? `<li class="rph-fd-cmore"><button type="button" data-fd="cmore" data-id="${escapeHtml(x.id)}" aria-expanded="${feedCmtOpen.has(x.id)}">${escapeHtml(feedCmtOpen.has(x.id) ? t('feed_cless') : t('feed_cmore', { n: cm.length - 2 }))}</button></li>` : ''}${(cm.length > 2 && !feedCmtOpen.has(x.id) ? cm.slice(-2) : cm).map(c => { const k = x.comments.indexOf(c), sure = feedSure === 'c:' + x.id + ':' + k; return `<li class="${c.who === 'user' ? 'mine' : ''}${justNow(c) ? ' fresh' : ''}">${c.who === 'user' ? '' : avatarHtml(c.author)}<span><b>${escapeHtml(c.who === 'user' ? t('pv_you') : c.author)}</b> ${escapeHtml(c.text)}</span><button type="button" class="rph-fd-cdel${sure ? ' sure' : ''}" data-fd="cdel" data-id="${escapeHtml(x.id)}" data-k="${k}" aria-label="${escapeHtml(t(sure ? 'msg_del_sure' : 'feed_cdel'))}" title="${escapeHtml(t(sure ? 'msg_del_sure' : 'feed_cdel'))}"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button></li>`; }).join('')}${x.waiting ? `<li class="rph-fd-typing">•••</li>` : ''}</ul>` : ''}
         <div class="rph-fd-reply"${feedReplyOpen === x.id || x.waiting ? '' : ' hidden'}><input type="text" class="rph-fd-in" maxlength="300" placeholder="${escapeHtml(t('feed_comment_ph'))}" aria-label="${escapeHtml(t('feed_comment_ph'))}"${x.waiting ? ' disabled' : ''}><button type="button" class="rph-fd-send" data-fd="send" data-id="${escapeHtml(x.id)}" aria-label="${escapeHtml(t('feed_send'))}"${x.waiting ? ' disabled' : ''}><i class="fa-solid fa-paper-plane" aria-hidden="true"></i></button></div>
     </article>`;
 }
@@ -4044,6 +4231,7 @@ function renderFeedApp(box) {
     if (keepId) { const inp = box.querySelector(`.rph-fd-post[data-id="${CSS.escape(keepId)}"] .rph-fd-in`); if (inp && inp !== document.activeElement) { inp.value = keepVal; inp.focus(); } }
     box.querySelectorAll('img.rph-img[data-key]:not([src])').forEach(async im => { const u = await imageUrl(im.dataset.key); if (u && im.isConnected) im.src = u; });
 }
+const feedCmtOpen = new Set();   // (2.1.6) posts whose every comment is shown (otherwise the last two)
 let feedSure = '', feedSureT = 0;   // what waits for its second tap to be deleted
 function armFeedSure(tag) { feedSure = tag; clearTimeout(feedSureT); feedSureT = setTimeout(() => { feedSure = ''; renderBubbles(); }, 3000); renderBubbles(); }
 function onFeedClick(e) {
@@ -4052,6 +4240,7 @@ function onFeedClick(e) {
     const id = el.dataset.id, act = el.dataset.fd;
     if (act === 'on') { settings.feedOn = true; saveSettings(); $('#rph-feed-on').prop('checked', true); makeFeedBatch(true); return; }
     if (act === 'more') { makeFeedBatch(true); return; }
+    if (act === 'cmore') { const pid = String(el.dataset.id || ''); if (feedCmtOpen.has(pid)) feedCmtOpen.delete(pid); else feedCmtOpen.add(pid); renderBubbles(); return; }
     // (2.1.3) the player cleans the feed: a post, a comment, or everything — each asks for a second tap
     if (act === 'clear') {
         if (feedSure !== 'all') { armFeedSure('all'); return; }
@@ -4139,14 +4328,14 @@ async function callTalk(rq, extra, isInitiative) {
     try {
         const msgs = await generateReply([id], `\n${callFill(CALL_LINE)}${extra ? '\n' + extra : ''}`, isInitiative, id);
         if (!isCurrent(rq) || !call || call.id !== id) return;
-        if (!msgs.length) toastr.info(t('err'));
+        if (!msgs.length && !msgs.leftOnRead) toastr.info(t('err'));
         for (const m of msgs) {
             const k = classify(m.text);
             const text = k.type === 'image' || k.type === 'file' ? '' : m.text;   // no photos or files down a phone line
             if (!text) continue;
             pushRaw(id, { who: 'char', name: m.name, text, ts: Date.now(), call: call.started });
             renderBubbles();
-            if (settings.tts) await speakVoice(m.name, stripNamePrefix(text, m.name).replace(/\([^)]*\)/g, ' ').trim(), id);
+            if (settings.tts) await speakVoice(m.name, callSpoken(stripNamePrefix(text, m.name)).replace(/\([^)]*\)/g, ' ').trim(), id);
         }
     } catch (e) { requestFailed(e, rq, 'call'); }
     if (!isCurrent(rq)) return;
@@ -4223,7 +4412,7 @@ function renderCall(box) {
     const status = ring ? t(call.dir === 'in' ? 'call_incoming' : 'call_calling') : callDur(Math.round((Date.now() - call.started) / 1000));
     const html = `<div class="rph-call${ring ? ' ringing' : ''}">
         <div class="rph-call-who"><span class="rph-call-ava">${avatarHtml(call.id)}</span><b>${escapeHtml(call.id)}</b><small class="rph-call-st" aria-live="polite">${escapeHtml(status)}</small></div>
-        <div class="rph-call-lines">${lines.map(m => `<p class="${m.who === 'user' ? 'mine' : ''}">${escapeHtml(m.who === 'user' ? m.text : stripNamePrefix(m.text, m.name))}</p>`).join('')}${!ring && busy && busyFor === call.id ? '<p class="rph-call-dots">•••</p>' : ''}</div>
+        <div class="rph-call-lines">${lines.map(m => `<p class="${m.who === 'user' ? 'mine' : ''}">${escapeHtml(m.who === 'user' ? m.text : callSpoken(stripNamePrefix(m.text, m.name)))}</p>`).join('')}${!ring && busy && busyFor === call.id ? '<p class="rph-call-dots">•••</p>' : ''}</div>
         ${ring ? '' : `<div class="rph-call-say"><input type="text" class="rph-call-in" maxlength="600" placeholder="${escapeHtml(t('call_say_ph'))}" aria-label="${escapeHtml(t('call_say_ph'))}"><button type="button" class="rph-call-send" data-call="say" aria-label="${escapeHtml(t('feed_send'))}"><i class="fa-solid fa-paper-plane" aria-hidden="true"></i></button></div>`}
         <div class="rph-call-btns">
             ${ring && call.dir === 'in' ? `<button type="button" class="rph-call-b no" data-call="decline" aria-label="${escapeHtml(t('call_decline'))}"><i class="fa-solid fa-phone-slash" aria-hidden="true"></i><span>${escapeHtml(t('call_decline'))}</span></button><button type="button" class="rph-call-b yes" data-call="answer" aria-label="${escapeHtml(t('call_answer'))}" data-focus><i class="fa-solid fa-phone" aria-hidden="true"></i><span>${escapeHtml(t('call_answer'))}</span></button>`
@@ -5088,6 +5277,8 @@ async function makeShop() {
     } catch (e) { toastr.warning(e && e.name === 'TimeoutError' ? t('timeout') : t('err')); console.warn('[Phone] shop failed', e); }
     finally { shopBusy = false; renderBubbles(); }
 }
+let shopTab = 'window';      // (2.1.7) 'window' | 'mine' (the gifts the player got)
+let giftSure = '', giftSureT = 0;
 function renderShopApp(box) {
     dailySparks();
     const items = settings.shop.items;
@@ -5097,12 +5288,19 @@ function renderShopApp(box) {
     const people = conversations().filter(c => !isGroup(c.id) && !isUnknown(c.id));
     const html = `<div class="rph-apphead shop"><button type="button" class="rph-tbtn" data-act="home" aria-label="${escapeHtml(t('lk_home'))}" data-focus><i class="fa-solid fa-chevron-left" aria-hidden="true"></i></button><b>${escapeHtml(t('app_shop'))}</b><span class="rph-coins" aria-label="${escapeHtml(t('coin_balance', { n: settings.wallet }))}"><i class="fa-solid fa-star-of-life" aria-hidden="true"></i>${settings.wallet}</span></div>
         <div class="rph-appbody rph-shop">
+            <div class="rph-seg" role="tablist"><button type="button" role="tab" data-shop="tab" data-tab="window" aria-selected="${shopTab !== 'mine'}">${escapeHtml(t('shop_window'))}</button><button type="button" role="tab" data-shop="tab" data-tab="mine" aria-selected="${shopTab === 'mine'}">${escapeHtml(t('shop_mine'))}${settings.gifts.length ? ` · ${settings.gifts.length}` : ''}</button></div>
+            ${shopTab === 'mine' ? (settings.gifts.length ? `<div class="rph-mygifts">${settings.gifts.slice().reverse().map(g => `<div class="rph-mygift${g.opened ? '' : ' wrapped'}">
+                ${avatarHtml(g.from)}
+                <span class="rph-mygift-tx"><b>${escapeHtml(g.opened ? g.what : t('gift_tap'))}</b><small>${escapeHtml(t('gift_from', { name: g.from }) + ' · ' + whenShort(g.ts))}</small>${g.opened && g.note ? `<em>«${escapeHtml(g.note)}»</em>` : ''}</span>
+                ${g.opened ? '' : `<button type="button" class="rph-gbtn main" data-shop="unwrap" data-id="${escapeHtml(g.id)}">${escapeHtml(t('gift_open'))}</button>`}
+                <button type="button" class="rph-fd-del${giftSure === g.id ? ' sure' : ''}" data-shop="gdel" data-id="${escapeHtml(g.id)}" aria-label="${escapeHtml(t(giftSure === g.id ? 'msg_del_sure' : 'gift_del'))}" title="${escapeHtml(t(giftSure === g.id ? 'msg_del_sure' : 'gift_del'))}"><i class="fa-solid fa-trash-can" aria-hidden="true"></i></button>
+            </div>`).join('')}</div>` : `<div class="rph-fd-off"><i class="fa-solid fa-gift" aria-hidden="true"></i><p>${escapeHtml(t('gift_none'))}</p></div>`) : `
             <p class="rph-card-p">${escapeHtml(t('shop_tip', { d: WALLET_DAILY, cap: WALLET_CAP }))}</p>
             ${items.length ? `<div class="rph-shop-grid">${items.map(x => `<div class="rph-shop-item">
                 <b>${escapeHtml(x.name)}</b>${x.desc ? `<small>${escapeHtml(x.desc)}</small>` : ''}
                 <button type="button" class="rph-gbtn ${settings.wallet >= x.price ? 'main' : 'quiet'}" data-shop="buy" data-id="${escapeHtml(x.id)}"${settings.wallet >= x.price ? '' : ' disabled'} aria-label="${escapeHtml(t('shop_buy', { name: x.name, n: x.price }))}"><i class="fa-solid fa-star-of-life" aria-hidden="true"></i> ${x.price}</button>
             </div>`).join('')}</div>` : `<div class="rph-fd-off"><i class="fa-solid fa-bag-shopping" aria-hidden="true"></i><p>${escapeHtml(t('shop_empty'))}</p></div>`}
-            <button type="button" class="rph-gbtn quiet" data-shop="refresh" title="${escapeHtml(t('cost_one'))}"${shopBusy || fresh ? ' disabled' : ''}>${escapeHtml(t(shopBusy ? 'shop_busy' : fresh ? 'shop_fresh' : 'shop_refresh'))}</button>
+            <button type="button" class="rph-gbtn quiet" data-shop="refresh" title="${escapeHtml(t('cost_one'))}"${shopBusy || fresh ? ' disabled' : ''}>${escapeHtml(t(shopBusy ? 'shop_busy' : fresh ? 'shop_fresh' : 'shop_refresh'))}</button>`}
         </div>
         ${buying ? `<div class="rph-map-sheet" role="dialog" aria-modal="true" tabindex="-1" aria-label="${escapeHtml(t('shop_to'))}">
             <div class="rph-gal-top"><button type="button" class="rph-tbtn" data-shop="close" aria-label="${escapeHtml(t('gal_close'))}"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button><span><b>${escapeHtml(buying.name)}</b><small>${escapeHtml(t('shop_cost', { n: buying.price }))}</small></span></div>
@@ -5124,7 +5322,7 @@ async function giftReply(to, it) {
     try {
         const line = GIFT_LINE.split('{{user}}').join(name1 || 'the player').split('{{gift}}').join(it.name + (it.desc ? ' — ' + it.desc : ''));
         const msgs = await generateReply(names, '\n' + line, false, to);
-        if (isCurrent(rq)) { if (!msgs.length) toastr.info(t('err')); await deliverReply(to, msgs, rq); }
+        if (isCurrent(rq)) { if (!msgs.length && !msgs.leftOnRead) toastr.info(t('err')); await deliverReply(to, msgs, rq); }
     } catch (e) { requestFailed(e, rq, 'reply'); }
     if (!isCurrent(rq)) return;
     finishRequest(rq); scrollOffset = 0; renderBubbles();
@@ -5134,6 +5332,13 @@ function onShopClick(e) {
     if (!el || el.disabled) return;
     const a = el.dataset.shop;
     if (a === 'refresh') { makeShop(); return; }
+    if (a === 'tab') { shopTab = el.dataset.tab === 'mine' ? 'mine' : 'window'; giftSure = ''; renderBubbles(); return; }
+    if (a === 'unwrap') { const g = settings.gifts.find(x => x.id === el.dataset.id); if (g) { g.opened = true; editRev++; saveSettings(); renderBubbles(); } return; }
+    if (a === 'gdel') {
+        const id = String(el.dataset.id || '');
+        if (giftSure !== id) { giftSure = id; clearTimeout(giftSureT); giftSureT = setTimeout(() => { giftSure = ''; renderBubbles(); }, 3000); renderBubbles(); return; }
+        settings.gifts = settings.gifts.filter(x => x.id !== id); giftSure = ''; saveSettings(); renderBubbles(); return;
+    }
     if (a === 'buy') shopBuying = el.dataset.id;
     else if (a === 'close') shopBuying = '';
     else if (a === 'give') {
@@ -5340,6 +5545,7 @@ function renderBubbles(force) {
     }
     const summed = new Set(callSum.values());
     const folded = m => !!m.call && summed.has(m.call) && !openCalls.has(m.call) && !(call && call.started === m.call);
+    let lastMine = null; for (let k = th.length - 1; k >= 0; k--) if (th[k].who === 'user') { lastMine = th[k]; break; }
     const nextNodes = new Map();
     const nodes = slice.map((m, i) => {
         const total = slice.length;
@@ -5355,7 +5561,16 @@ function renderBubbles(force) {
         const kind = classify(ns ? ns.rest : m.text);
 
         let inner;
-        if (m.img || m.imgKey) {
+        const giftM = !mine && /^\[\s*gift\s+for\s+you\s*:\s*([^\]]+)\]$/i.exec(stripNamePrefix(String(m.text || '').trim(), m.name));
+        if (giftM) {
+            // (2.1.7) a gift for the player: wrapped until a tap
+            const g = giftOf(m, giftM[1].trim());
+            const open = g ? g.opened : true;
+            inner = `<button type="button" class="rph-giftbox${open ? ' open' : ''}" data-gift="${escapeHtml(g ? g.id : '')}" aria-label="${escapeHtml(open ? t('gift_from', { name: shownName }) + ': ' + giftM[1].trim() : t('gift_wrapped', { name: shownName }))}">
+                <span class="rph-gift-ic" aria-hidden="true"><i class="fa-solid ${open ? 'fa-gift' : 'fa-box'}"></i></span>
+                <span class="rph-gift-tx"><small>${escapeHtml(t('gift_from', { name: shownName }))}</small><b>${escapeHtml(open ? giftM[1].trim() : t('gift_tap'))}</b></span>
+            </button>`;
+        } else if (m.img || m.imgKey) {
             // a real photo the player attached — the thumbnail itself is the bubble
             inner = `<div class="rph-imgwrap">${m.imgKey ? imgTag(m.imgKey) : `<img class="rph-img" src="${safeImg(m.img)}" draggable="false">`}</div>` +
                 (kind.caption ? `<div class="rph-caption">${escapeHtml(kind.caption)}</div>` : '');
@@ -5416,6 +5631,7 @@ function renderBubbles(force) {
                 </div>
                 ${inner}${status ? acts : ''}
             </div>
+            ${mine && ((Array.isArray(m.reacts) && m.reacts.length) || (m.seen && m === lastMine)) ? `<div class="rph-under">${Array.isArray(m.reacts) && m.reacts.length ? `<div class="rph-reacts">${m.reacts.map(r => `<span class="rph-react" title="${escapeHtml(r.by)}" aria-label="${escapeHtml(r.by + ': ' + r.e)}">${escapeHtml(r.e)}</span>`).join('')}</div>` : ''}${m.seen && m === lastMine ? `<div class="rph-seen${m.seen === 'noreply' ? ' noreply' : ''}">${escapeHtml(t(m.seen === 'noreply' ? 'seen_noreply' : 'seen'))}</div>` : ''}</div>` : ''}
         `;
         const key = msgKey(cur, m);
         let el = msgNodes.get(key);
@@ -5510,6 +5726,12 @@ function photoPlaceholder(cur, m, mine, imgOn) {
         return `<div class="rph-photo err" data-ts="${escapeHtml(m.ts)}" title="${escapeHtml(st.err)}"><i class="fa-solid fa-rotate-right"></i><span class="rph-develop">${escapeHtml(t('img_retry'))}</span></div>`;
     }
     return `<div class="rph-photo can-gen" data-ts="${escapeHtml(m.ts)}"><i class="fa-regular fa-image"></i><span class="rph-develop"><i class="fa-solid fa-camera"></i> ${escapeHtml(t('img_develop'))}</span></div>`;
+}
+// (2.1.6) on a call a «[voice message: "words"]» is just the words said — the tag leaked onto the call screen
+function callSpoken(text) {
+    const k = classify(text);
+    if (k.type === 'voice') { const vp = voiceParts(k); return [vp.words, vp.tone ? `(${vp.tone})` : ''].filter(Boolean).join(' ') || String(text); }
+    return String(text);
 }
 function isCallLine(m) { return !!(m && m.call); }
 // (2.1.1) group threads: each person keeps one name colour (six per skin, all readable on it),
@@ -5623,6 +5845,14 @@ function onStackClick(e) {
     if (cx) { e.stopPropagation(); cancelRequest(); return; }
     const rg = tgt.closest('.rph-regen');
     if (rg) { e.stopPropagation(); regenerateAfter(Number(rg.dataset.ts)); return; }
+    const gb = tgt.closest('.rph-giftbox');
+    if (gb) {
+        e.stopPropagation();
+        const g = (settings.gifts || []).find(x => x.id === gb.dataset.gift);
+        if (g && !g.opened) { g.opened = true; saveSettings(); editRev++; gb.classList.add('unwrap'); setTimeout(() => renderBubbles(), matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 420); }
+        else if (g) { shopTab = 'mine'; setView('shop'); }
+        return;
+    }
     const cf = tgt.closest('[data-callfold]');
     if (cf) { e.stopPropagation(); const S = Number(cf.dataset.callfold); if (openCalls.has(S)) openCalls.delete(S); else openCalls.add(S); renderBubbles(); return; }
     const ed = tgt.closest('.rph-edit-btn');
@@ -5956,6 +6186,11 @@ function contactCardHtml(n) {
             </select>
             <input type="text" class="text_pole rph-voice-own" maxlength="200" placeholder="${escapeHtml(t('voice_own_ph'))}" aria-label="${escapeHtml(t('voice_m_own'))}" value="${escapeHtml(settings.voices[vw]?.manner && !VOICE_MANNERS[settings.voices[vw].manner] ? settings.voices[vw].manner : '')}"${settings.voices[vw]?.manner && !VOICE_MANNERS[settings.voices[vw].manner] ? '' : ' hidden'}>
         </div>
+        <div class="rph-card-sec rph-card-talk">
+            <div class="rph-card-h">${escapeHtml(t('talk_title'))}</div>
+            <p class="rph-card-p">${escapeHtml(t('talk_p'))}</p>
+            ${[n].concat(castList(n)).map(x => `<label class="rph-talk-row"><span>${escapeHtml(x)}</span><input type="range" class="rph-talk" min="0" max="100" step="5" data-who="${escapeHtml(x)}" value="${talkOf(x)}" aria-label="${escapeHtml(t('talk_title') + ': ' + x)}"><small class="rph-talk-v">${escapeHtml(talkWord(talkOf(x)))}</small></label>`).join('')}
+        </div>
         <div class="rph-card-sec rph-card-secret">
             <div class="rph-card-h">${escapeHtml(t('sec_title'))}</div>
             <p class="rph-card-p">${escapeHtml(t('sec_p'))}</p>
@@ -6074,6 +6309,8 @@ function renderRoster() {
     const closeEditor = () => { rosterEdit = null; renderRoster(); };
     /* a contact's own page: what each field does, said in words */
     body.on('change.rph', '.rph-voice-who', function () { voiceWho[String(this.closest('.rph-card-voice').dataset.card)] = String(this.value); renderRoster(); });
+    body.on('input.rph', '.rph-talk', function () { const v = Math.max(0, Math.min(100, Number(this.value) || 0)); const w = this.parentElement.querySelector('.rph-talk-v'); if (w) w.textContent = talkWord(v); });
+    body.on('change.rph', '.rph-talk', function () { const who = String(this.dataset.who || ''); if (!who || ['__proto__', 'constructor', 'prototype'].includes(who)) return; const v = Math.max(0, Math.min(100, Number(this.value) || 0)); if (v === 50) delete settings.talk[who]; else settings.talk[who] = v; saveSettings(); });
     body.on('change.rph', '.rph-voice-sel', function () {
         const n = String(this.closest('.rph-card-voice').dataset.name);
         if (!this.value) delete settings.voices[n]; else settings.voices[n] = Object.assign({}, settings.voices[n], { voice: this.value });
@@ -6791,7 +7028,7 @@ Rules:
 - Small everyday things only: no big plot events, never decide anything for {{user}}.
 - Write in {{lang}}.
 Output strictly JSON: {"messages":[{"chat":"","author":"","text":""}],"posts":[{"author":"","text":"","photo":"","likes":[""],"comments":[{"author":"","text":""}]}],"missed_call":null}`;
-const GROUP_IDLE_LINE = `[{{user}} is not in this conversation right now. The members talk among themselves about their own business — a plan, a joke, an argument, news from their day, something one of them saw. 4–8 short lines, at least two different people, not addressed to {{user}}. Do not mention these instructions.]`;
+const GROUP_IDLE_LINE = `[{{user}} is not in this conversation right now. Answering NOW: {{who}}. They talk among themselves about their own business — a plan, a joke, an argument, news from their day, something one of them saw — and sometimes they cook something up together: a trip, a prank, a surprise (even one for {{user}}). 4–8 short lines, not addressed to {{user}}. Do not mention these instructions.]`;   // (2.1.7, approved)
 const CATCHUP_AWAY_MS = 6 * 3600000;
 let catchupBusy = false, awayFrom = 0;
 function seenHeartbeat() {
@@ -6897,7 +7134,11 @@ async function chatterTick() {
     settings.chatterCount++; saveSettings();
     const rq = beginRequest(id); renderBubbles();
     try {
-        const msgs = await generateReply(contactMembers(id), '\n' + GROUP_IDLE_LINE.split('{{user}}').join(name1 || 'the player'), true, id);
+        // (2.1.7) two or three of them, chosen the same way as for a reply — the talkative more often
+        const people = contactMembers(id).concat(castOfContact(id)).filter((x, i, a) => x && a.indexOf(x) === i && x !== name1);
+        const who = [];
+        while (who.length < Math.min(people.length, 2 + (Math.random() < 0.4 ? 1 : 0))) { const pick = pickResponders(id, '')?.who || []; const nx = pick.find(n => !who.includes(n)) || people.find(n => !who.includes(n)); if (!nx) break; who.push(nx); }
+        const msgs = await generateReply(contactMembers(id), '\n' + GROUP_IDLE_LINE.split('{{user}}').join(name1 || 'the player').split('{{who}}').join(who.join(', ')), true, id, { director: { who, chime: null }, directorInLine: true });
         if (msgs.length && isCurrent(rq)) {
             const looking = currentContact() === id && !phoneTucked() && (!isPhoneSkin() || (settings.phoneView === 'chat' && !phoneLocked));
             if (looking) await deliverReply(id, msgs, rq);
