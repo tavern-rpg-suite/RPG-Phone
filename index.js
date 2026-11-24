@@ -426,7 +426,7 @@ const L = {
         call_call: 'Позвонить', call_busy: 'Сейчас уже идёт звонок.', call_missed_sys: 'Пропущенный звонок', call_declined_sys: 'Звонок отклонён', call_ended_sys: 'Звонок · {d}', call_unfold: 'Показать разговор ({n})', call_fold: 'Свернуть разговор',
         set_calls: 'Звонки', set_call_chance: 'Звонят вместо сообщения (%)', set_voicemail: 'После пропущенного звонка — голосовое сообщение',
         set_calls_tip: 'Только в обложках-телефонах. Звонок идёт по тем же правилам, что и «пишут первыми»: тихие часы и лимит в день. Голосовое — ещё один запрос.',
-        app_feed: 'Лента', feed_nobody: 'В ленте некому писать — добавь кого-нибудь в «Контакты».', feed_bad: 'Модель ответила, но не в том виде, который Лента умеет прочитать — попробуй ещё раз или другую модель.',
+        app_feed: 'Лента', feed_nobody: 'В ленте некому писать — добавь кого-нибудь в «Контакты».', shop_blank: 'Модель вернула пустой ответ — попробуй ещё раз или другую модель', feed_bad: 'Модель ответила, но не в том виде, который Лента умеет прочитать — попробуй ещё раз или другую модель.',
         feed_note: '{name} опубликовал(а) пост:', feed_draw: 'Проявить фото', feed_drawing: 'Проявляю…', feed_like: 'Нравится', feed_comments: 'комментариев: {n}',
         feed_comment_ph: 'Комментарий…', feed_send: 'Отправить', catchup_note: 'Пока вас не было: новых — {n}', feed_cmore: 'Ещё комментарии: {n}', feed_cless: 'Свернуть комментарии', feed_del: 'Удалить пост', feed_cdel: 'Удалить комментарий', feed_clear: 'Очистить ленту', feed_clear_sure: 'Нажмите ещё раз — удалится вся лента', feed_cleared: 'Лента очищена', feed_stories: 'Истории за день', feed_you: 'вам', feed_liked_one: 'Нравится {name}', feed_liked_more: 'Нравится {name} и ещё {n}', feed_story_new: 'новое', feed_more: 'Новые посты', feed_off_h: 'Лента выключена',
         feed_off_p: 'Здесь персонажи с телефона сами пишут посты о своём дне и комментируют друг друга. Каждая пачка постов — один запрос к модели, твой комментарий — ещё один.',
@@ -552,7 +552,7 @@ const L = {
         call_call: 'Call', call_busy: 'A call is already on.', call_missed_sys: 'Missed call', call_declined_sys: 'Call declined', call_ended_sys: 'Call · {d}', call_unfold: 'Show the talk ({n})', call_fold: 'Fold the talk',
         set_calls: 'Calls', set_call_chance: 'They call instead of texting (%)', set_voicemail: 'A missed call leaves a voice message',
         set_calls_tip: 'Phone skins only. A call follows the same rules as texting first: quiet hours and the daily limit. A voice message is one more request.',
-        app_feed: 'Feed', feed_nobody: 'Nobody to post in the feed — add someone in Contacts.', feed_bad: 'The model answered, but not in a form the Feed can read — try again or another model.',
+        app_feed: 'Feed', feed_nobody: 'Nobody to post in the feed — add someone in Contacts.', shop_blank: 'The model returned an empty answer — try again or another model', feed_bad: 'The model answered, but not in a form the Feed can read — try again or another model.',
         feed_note: '{name} posted:', feed_draw: 'Develop the photo', feed_drawing: 'Developing…', feed_like: 'Like', feed_comments: '{n} comments',
         feed_comment_ph: 'Comment…', feed_send: 'Send', catchup_note: 'While you were away: {n} new', feed_cmore: '{n} more comments', feed_cless: 'Fold the comments', feed_del: 'Delete the post', feed_cdel: 'Delete the comment', feed_clear: 'Clear the feed', feed_clear_sure: 'Tap again — the whole feed goes', feed_cleared: 'The feed is cleared', feed_stories: 'Stories of the day', feed_you: 'you', feed_liked_one: 'Liked by {name}', feed_liked_more: 'Liked by {name} and {n} more', feed_story_new: 'new', feed_more: 'New posts', feed_off_h: 'The feed is off',
         feed_off_p: 'Here the people on your phone post about their day and comment on each other. Each batch of posts is one request to the model; each comment of yours is one more.',
@@ -3984,12 +3984,20 @@ function feedName(raw, allowed) {
 }
 // a model's JSON, tolerantly: fences, a leading remark, single quotes, trailing commas
 function readJsonLoose(raw) {
-    let s = String(raw || '').replace(/<(think|thinking|reasoning)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, '').trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/, '').trim();
-    const a = s.indexOf('{'), b = s.lastIndexOf('}');
-    if (a < 0 || b <= a) return null;
-    s = s.slice(a, b + 1);
-    try { return JSON.parse(s); } catch (e) { /* try a gentler reading */ }
-    try { return JSON.parse(s.replace(/,\s*([}\]])/g, '$1').replace(/[“”]/g, '"')); } catch (e) { return null; }
+    const s = String(raw || '').replace(/<(think|thinking|reasoning)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, '').trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/, '').trim();
+    // (2.1.8) some models answer with a bare list «[{…},{…}]» — cutting from the first «{» to the last «}»
+    // then gave «{…},{…}», which is not JSON, and the answer was lost. Both cuts are tried, the earlier one first.
+    const a = s.indexOf('{'), b = s.lastIndexOf('}'), la = s.indexOf('['), lb = s.lastIndexOf(']');
+    const cuts = [];
+    if (a >= 0 && b > a) cuts.push([a, s.slice(a, b + 1)]);
+    if (la >= 0 && lb > la) cuts.push([la, s.slice(la, lb + 1)]);
+    cuts.sort((x, y) => x[0] - y[0]);
+    const parse = (x) => { let v = JSON.parse(x); for (let i = 0; i < 2 && typeof v === 'string'; i++) { try { v = JSON.parse(v.trim()); } catch (e) { break; } } return v; };
+    for (const [, c] of cuts) {
+        try { return parse(c); } catch (e) { /* try a gentler reading */ }
+        try { return parse(c.replace(/,\s*([}\]])/g, '$1').replace(/[“”]/g, '"')); } catch (e) { /* the next cut */ }
+    }
+    return null;
 }
 let feedBusy = false;
 let feedReplyOpen = '';   // the post whose comment field is open (one at a time)
@@ -4004,11 +4012,13 @@ async function feedCall(system, user) {
         const res = await fetch(apiUrl() + '/chat/completions', {
             method: 'POST', signal: ctrl.signal,
             headers: { 'Authorization': `Bearer ${apiKey().trim()}`, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ model: apiModel(), messages: [{ role: 'system', content: system }, { role: 'user', content: user }], temperature: settings.temperature, max_tokens: 1600, max_completion_tokens: 1600 })
+            body: JSON.stringify({ model: apiModel(), messages: [{ role: 'system', content: system }, { role: 'user', content: user }], temperature: settings.temperature, max_tokens: 3000, max_completion_tokens: 3000 })   // (2.1.8) a thinking model spends part of it before it writes
         });
         if (!res.ok) throw new Error('HTTP ' + res.status);
         const data = await res.json();
-        return String(data.choices?.[0]?.message?.content || '').trim();
+        const c = data.choices?.[0]?.message?.content;
+        // (2.1.8) some providers send the text as a list of parts
+        return String(Array.isArray(c) ? c.map(x => (x && typeof x === 'object') ? (x.text || '') : String(x || '')).join('') : (c || '')).trim();
     } finally { clearTimeout(timer); if (feedAbort === ctrl) feedAbort = null; }
 }
 function feedFill(tpl, n) { return tpl.split('{{user}}').join(name1 || 'the player').split('{{lang}}').join(genLang()).split('{{n}}').join(String(n)); }
@@ -5255,6 +5265,26 @@ function onMusicClick(e) {
 const SHOP_PROMPT = `Write a small shop catalogue that fits this story world and its setting: 6 to 8 gifts {{user}} could buy and send to someone — flowers, sweets, jewellery, books, trinkets, clothes or whatever this world sells. Short names, one line each, and a fair price in {{currency}} between 5 and 200. Never invent plot events. Write in {{lang}}.
 Output strictly JSON: {"items":[{"name":"","desc":"","price":0}]}`;
 let shopBusy = false, shopBuying = '';
+function shopItemsOf(data) {
+    if (!data) return [];
+    let list = Array.isArray(data) ? data : null;
+    if (!list && typeof data === 'object') {
+        for (const k of ['items', 'products', 'goods', 'catalogue', 'catalog', 'gifts', 'товары', 'предметы', 'подарки']) if (Array.isArray(data[k])) { list = data[k]; break; }
+        if (!list) list = Object.values(data).find(v => Array.isArray(v)) || null;
+    }
+    if (!list) return [];
+    const pick = (x, keys) => { for (const k of keys) if (x && x[k] != null && x[k] !== '') return x[k]; return ''; };
+    const now = Date.now().toString(36);
+    return list.map((x, i) => {
+        if (typeof x === 'string') x = { name: x };
+        if (!x || typeof x !== 'object') return null;
+        const name = cleanLine(pick(x, ['name', 'title', 'item', 'название', 'имя']), 60);
+        if (!name || /^-?\d+([.,]\d+)?$/.test(name) || /^(null|undefined|none|n\/a)$/i.test(name)) return null;
+        const pr = pick(x, ['price', 'cost', 'цена', 'стоимость']);
+        const n = typeof pr === 'number' ? pr : Number((String(pr).match(/\d+/) || [])[0]);
+        return { id: now + i, name, desc: cleanLine(pick(x, ['desc', 'description', 'описание']), 140) || '', price: Math.max(5, Math.min(200, Math.round(n) || 20)) };
+    }).filter(Boolean).slice(0, 8);
+}
 function dailySparks() {
     const today = ymd(new Date());
     if (settings.walletDay === today) return;
@@ -5269,9 +5299,14 @@ async function makeShop() {
     shopBusy = true; renderBubbles();
     try {
         const usr = [worldLine(), mainChatContext(phonePeople(), Math.min(6, settings.mainChatMessages))].filter(Boolean).join('\n\n') || '[No story context yet.]';
-        const data = readJsonLoose(await feedCall(SHOP_PROMPT.split('{{user}}').join(name1 || 'the player').split('{{currency}}').join(t('coin_many')).split('{{lang}}').join(genLang()), usr));
-        const items = (data && Array.isArray(data.items) ? data.items : []).map((x, i) => ({ id: Date.now().toString(36) + i, name: cleanLine(x && x.name, 60), desc: cleanLine(x && x.desc, 140) || '', price: Math.max(5, Math.min(200, Math.round(Number(x && x.price) || 0) || 20)) })).filter(x => x.name).slice(0, 8);
-        if (!items.length) { toastr.warning(t('feed_bad')); return; }
+        const sys = SHOP_PROMPT.split('{{user}}').join(name1 || 'the player').split('{{currency}}').join(t('coin_many')).split('{{lang}}').join(genLang());
+        // BUG FIX (2.1.8): «the generation went through, but the window is empty» — an answer in another
+        // shape (a bare list, "products", "название", "15 искр") was thrown away without a word.
+        // Equal shapes are accepted now; an unreadable answer is asked once more and logged.
+        let raw = await feedCall(sys, usr);
+        let items = shopItemsOf(readJsonLoose(raw));
+        if (!items.length) { console.warn('[Phone] shop: could not read the answer, asking once more:', String(raw).slice(0, 800)); raw = await feedCall(sys, usr); items = shopItemsOf(readJsonLoose(raw)); }
+        if (!items.length) { console.warn('[Phone] shop: could not read the answer:', String(raw).slice(0, 800)); toastr.warning(t(String(raw || '').trim() ? 'feed_bad' : 'shop_blank')); return; }
         settings.shop = { items, day: ymd(new Date()) };
         saveSettings();
     } catch (e) { toastr.warning(e && e.name === 'TimeoutError' ? t('timeout') : t('err')); console.warn('[Phone] shop failed', e); }
