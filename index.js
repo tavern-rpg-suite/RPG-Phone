@@ -349,7 +349,7 @@ const L = {
         img_t_or: 'OpenRouter / картинка из чата (nano-banana, grok)', img_t_comfy: 'ComfyUI — локально, на своей видеокарте',
         img_url: 'URL API картинок', img_key: 'Ключ API картинок', img_model: 'Модель', img_model_ph: 'например flux-schnell или google/gemini-2.5-flash-image',
         img_size: 'Размер', img_style: 'Стиль', img_style_ph: 'например: аниме, мягкий свет', img_tpl: 'Промпт фото · {CAPTION} {NAME} {LOOK} {STYLE}',
-        img_borrowed: 'Подключение взято из Кроличьей норы.', img_develop: 'Проявить', img_drawing: 'Рисую…', img_retry: 'Не вышло — нажми, чтобы повторить',
+        img_borrowed: 'Подключение взято из Кроличьей норы.', img_hub_cloud: 'Рисует облако из Хаба ({model}). Поля ниже остаются твоими — вернутся, если в Хабе выбрать «своё».', img_hub_local: 'Рисует ComfyUI из Хаба ({url}). Поля ниже остаются твоими — вернутся, если в Хабе выбрать «своё».', comfy_from_hub: ' · адрес из Хаба', img_develop: 'Проявить', img_drawing: 'Рисую…', img_retry: 'Не вышло — нажми, чтобы повторить',
         img_off: 'Включи «Фото от персонажей» в настройках телефона.', img_retrying: 'Фото: попытка {a} из {b}…', img_cancel: 'Остановить', img_redo: 'Перерисовать',
         comfy_state0: 'ещё не проверяли', comfy_test: '🔌 Проверить', comfy_ckpt: 'Модель (чекпойнт)', comfy_first: 'первая по списку',
         comfy_lora: 'Лора', comfy_nolora: 'без лоры', comfy_lstr: 'Сила', comfy_sampler: 'Сэмплер', comfy_sched: 'Планировщик', comfy_steps: 'Шаги',
@@ -473,7 +473,7 @@ const L = {
         img_t_or: 'OpenRouter / chat image (nano-banana, grok)', img_t_comfy: 'ComfyUI — local, on your own GPU',
         img_url: 'Image API URL', img_key: 'Image API key', img_model: 'Model', img_model_ph: 'e.g. flux-schnell or google/gemini-2.5-flash-image',
         img_size: 'Size', img_style: 'Style', img_style_ph: 'e.g. anime, soft light', img_tpl: 'Photo prompt · {CAPTION} {NAME} {LOOK} {STYLE}',
-        img_borrowed: 'Connection borrowed from the Rabbit Hole.', img_develop: 'Develop', img_drawing: 'Drawing…', img_retry: 'Failed — click to retry',
+        img_borrowed: 'Connection borrowed from the Rabbit Hole.', img_hub_cloud: 'Drawing with the cloud from the Suite Hub ({model}). The fields below stay yours — they come back when the hub is set to «own».', img_hub_local: 'Drawing with ComfyUI from the Suite Hub ({url}). The fields below stay yours — they come back when the hub is set to «own».', comfy_from_hub: ' · address from the Suite Hub', img_develop: 'Develop', img_drawing: 'Drawing…', img_retry: 'Failed — click to retry',
         img_off: 'Turn on "Photos from characters" in the phone settings.', img_retrying: 'Photo: attempt {a} of {b}…', img_cancel: 'Stop', img_redo: 'Redraw',
         comfy_state0: 'not checked yet', comfy_test: '🔌 Check', comfy_ckpt: 'Model (checkpoint)', comfy_first: 'first in the list',
         comfy_lora: 'LoRA', comfy_nolora: 'no LoRA', comfy_lstr: 'Strength', comfy_sampler: 'Sampler', comfy_sched: 'Scheduler', comfy_steps: 'Steps',
@@ -1693,8 +1693,24 @@ function imgBorrowed() {
     } catch (e) { }
     return null;
 }
+/* (2.1.8, Suite Hub 1.4) The Suite Hub can give the Phone its drawing connection: the cloud filled there, or the
+   local ComfyUI. Only the connection — size, template and the ComfyUI checkpoint stay the Phone's own. «Own» in the
+   hub (the default) changes nothing. */
+function hubImg() {
+    try {
+        const h = extension_settings.tavern_rpg_engine && extension_settings.tavern_rpg_engine.images;
+        const use = h && h.use && h.use.rpg_phone;
+        const c = h && h.cloud, l = h && h.local;
+        if (use === 'cloud' && c && String(c.url || '').trim() && String(c.model || '').trim())
+            return { kind: 'cloud', mode: c.mode === 'openai' || c.mode === 'openrouter' ? c.mode : 'auto', apiUrl: String(c.url).trim().replace(/\/+$/, ''), apiKey: String(c.key || '').trim(), model: String(c.model).trim() };
+        if (use === 'local' && l && String(l.url || '').trim()) return { kind: 'local', mode: 'comfy', apiUrl: String(l.url).trim().replace(/\/+$/, ''), apiKey: '', model: '' };
+    } catch (e) { /* a broken hub must not stop drawing */ }
+    return null;
+}
 function imgConn() {
     const own = imgCfg();
+    const h = hubImg();
+    if (h) return { mode: h.mode, apiUrl: h.apiUrl, apiKey: h.apiKey, model: h.model, comfy: comfyCfg(), from: 'hub' };
     if (String(own.apiUrl || '').trim() || own.mode === 'comfy') return { mode: own.mode, apiUrl: own.apiUrl, apiKey: own.apiKey, model: own.model, comfy: comfyCfg(), from: null };
     const b = imgBorrowed();
     if (b) return { mode: b.mode || 'auto', apiUrl: b.apiUrl, apiKey: b.apiKey, model: b.model, comfy: Object.assign({}, COMFY_DEF, b.comfy || {}), from: 'rpg_dungeons' };
@@ -6993,7 +7009,7 @@ function setupImageUI() {
         try {
             const i = await comfyInfo(true);
             fillComfyLists();
-            const from = !String(imgConn().apiUrl || '').trim() && comfyBorrowed() ? t('comfy_from_lens') : '';
+            const from = hubImg() ? t('comfy_from_hub') : !String(imgConn().apiUrl || '').trim() && comfyBorrowed() ? t('comfy_from_lens') : '';
             comfyState(t('comfy_ok', { c: i.ckpts.length, l: i.loras.length }) + from, 'ok');
             if (!quiet && !i.ckpts.length) toastr.warning(drawErrText(comfyErr('comfy-nockpt', '')));
         } catch (e) {
@@ -7006,9 +7022,12 @@ function setupImageUI() {
         $('#rph-comfy').toggle(on);
         $('.rph-settings .rph-cloudonly').toggle(!on);
         $('#rph-img-url').attr('placeholder', on ? (comfyBorrowed() || 'http://127.0.0.1:8188') : 'https://api.navy/v1');
-        $('#rph-img-note').text(imgConn().from ? t('img_borrowed') : '');
+        const hi = hubImg();
+        $('#rph-img-note').text(hi ? (hi.kind === 'local' ? t('img_hub_local', { url: hi.apiUrl }) : t('img_hub_cloud', { model: hi.model })) : imgConn().from ? t('img_borrowed') : '');
         return on;
     };
+    window.removeEventListener('rpg:hub-images', window.__rphHubImg || (() => { }));
+    window.__rphHubImg = () => { try { refresh(); } catch (e) { /* panel gone */ } }; window.addEventListener('rpg:hub-images', window.__rphHubImg);
     fillComfyLists();
     $('#rph-comfy-lstr').val(cc.loraStrength);
     $('#rph-comfy-steps').val(cc.steps);
